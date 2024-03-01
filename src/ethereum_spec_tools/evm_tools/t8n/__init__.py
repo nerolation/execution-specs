@@ -12,6 +12,8 @@ from typing import Any
 from ethereum import rlp, trace
 from ethereum.base_types import U64, U256, Uint
 from ethereum.crypto.hash import keccak256
+from ethereum.exceptions import InvalidBlock
+from ethereum.utils.ensure import ensure
 from ethereum_spec_tools.forks import Hardfork
 
 from ..loaders.fixture_loader import Load
@@ -179,7 +181,7 @@ class T8N(Load):
         if self.fork.is_after_fork("ethereum.istanbul"):
             kw_arguments["chain_id"] = self.chain_id
 
-        if self.is_after_fork("ethereum.cancun"):
+        if self.fork.is_after_fork("ethereum.cancun"):
             (
                 sender_address,
                 effective_gas_price,
@@ -194,7 +196,7 @@ class T8N(Load):
             kw_arguments["caller"] = kw_arguments["origin"] = sender_address
             kw_arguments["gas_price"] = effective_gas_price
             kw_arguments["blob_versioned_hashes"] = blob_versioned_hashes
-        elif self.is_after_fork("ethereum.london"):
+        elif self.fork.is_after_fork("ethereum.london"):
             sender_address, effective_gas_price = self.fork.check_transaction(
                 tx,
                 self.env.base_fee_per_gas,
@@ -308,8 +310,12 @@ class T8N(Load):
         transactions_trie = self.fork.Trie(secured=False, default=None)
         receipts_trie = self.fork.Trie(secured=False, default=None)
         block_logs = ()
+        blob_gas_used = Uint(0)
 
-        if self.fork.is_after_fork("ethereum.cancun"):
+        if (
+            self.fork.is_after_fork("ethereum.cancun")
+            and self.env.parent_beacon_block_root is not None
+        ):
             beacon_block_roots_contract_code = self.fork.get_account(
                 self.alloc.state, self.BEACON_ROOTS_ADDRESS
             ).code
@@ -349,11 +355,14 @@ class T8N(Load):
                 blob_versioned_hashes=(),
             )
 
-            system_tx_output = self.interpreter.process_message_call(
+            system_tx_output = self.fork.process_message_call(
                 system_tx_message, system_tx_env
             )
 
-            self.state.destroy_touched_empty_accounts(
+            system_tx_output = self.fork.process_message_call(
+                system_tx_message, system_tx_env
+            )
+            self.fork.destroy_touched_empty_accounts(
                 system_tx_env.state, system_tx_output.touched_accounts
             )
 
@@ -369,6 +378,12 @@ class T8N(Load):
                 process_transaction_return = self.fork.process_transaction(
                     env, tx
                 )
+                if self.fork.is_after_fork("ethereum.cancun"):
+                    blob_gas_used += self.fork.calculate_total_blob_gas(tx)
+                    ensure(
+                        blob_gas_used <= self.fork.MAX_BLOB_GAS_PER_BLOCK,
+                        InvalidBlock,
+                    )
             except Exception as e:
                 # The tf tools expects some non-blank error message
                 # even in case e is blank.
@@ -429,6 +444,9 @@ class T8N(Load):
 
             self.result.withdrawals_root = self.fork.root(withdrawals_trie)
 
+        if self.fork.is_after_fork("ethereum.cancun"):
+            self.result.blob_gas_used = blob_gas_used
+            self.result.excess_blob_gas = self.env.excess_blob_gas
         self.result.state_root = self.fork.state_root(self.alloc.state)
         self.result.tx_root = self.fork.root(transactions_trie)
         self.result.receipt_root = self.fork.root(receipts_trie)

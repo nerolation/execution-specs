@@ -44,6 +44,8 @@ class Env:
     parent_ommers_hash: Optional[Hash32]
     ommers: Any
     parent_beacon_block_root: Optional[Hash32]
+    parent_excess_blob_gas: Optional[U64]
+    parent_blob_gas_used: Optional[U64]
     excess_blob_gas: Optional[U64]
 
     def __init__(self, t8n: Any, stdin: Optional[Dict] = None):
@@ -67,13 +69,46 @@ class Env:
         self.read_withdrawals(data, t8n)
 
         if t8n.fork.is_after_fork("ethereum.cancun"):
-            self.parent_beacon_block_root = Bytes32(
-                hex_to_bytes(data["parentBeaconBlockRoot"])
+            parent_beacon_block_root_hex = data.get("parentBeaconBlockRoot")
+            self.parent_beacon_block_root = (
+                Bytes32(hex_to_bytes(parent_beacon_block_root_hex))
+                if parent_beacon_block_root_hex is not None
+                else None
             )
-            self.excess_blob_gas = parse_hex_or_int(data["excessBlobGas"], U64)
-        else:
-            self.parent_beacon_block_root = None
-            self.excess_blob_gas = None
+            self.read_excess_blob_gas(data, t8n)
+
+    def read_excess_blob_gas(self, data: Any, t8n: Any) -> None:
+        """
+        Read the excess_blob_gas from the data. If the excess blob gas is
+        not present, it is calculated from the parent block parameters.
+        """
+        self.parent_blob_gas_used = None
+        self.parent_excess_blob_gas = None
+        self.excess_blob_gas = None
+
+        if t8n.fork.is_after_fork("ethereum.cancun"):
+            if "currentExcessBlobGas" in data:
+                self.excess_blob_gas = parse_hex_or_int(
+                    data["currentExcessBlobGas"], U64
+                )
+            else:
+                self.parent_excess_blob_gas = parse_hex_or_int(
+                    data["parentExcessBlobGas"], U64
+                )
+                self.parent_blob_gas_used = parse_hex_or_int(
+                    data["parentBlobGasUsed"], U64
+                )
+
+                excess_blob_gas = (
+                    self.parent_excess_blob_gas + self.parent_blob_gas_used
+                )
+
+                if excess_blob_gas < t8n.vm_gas.TARGET_BLOB_GAS_PER_BLOCK:
+                    self.excess_blob_gas = U64(0)
+                else:
+                    self.excess_blob_gas = (
+                        excess_blob_gas - t8n.vm_gas.TARGET_BLOB_GAS_PER_BLOCK
+                    )
 
     def read_base_fee_per_gas(self, data: Any, t8n: Any) -> None:
         """

@@ -30,6 +30,7 @@ def block_hash(evm: Evm) -> None:
         The current EVM frame.
 
     """
+    print("this does")
     # STACK
     block_number = pop(evm.stack)
 

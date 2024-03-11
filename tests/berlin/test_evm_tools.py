@@ -1,3 +1,4 @@
+import sys
 import importlib
 from functools import partial
 from typing import Dict
@@ -39,5 +40,10 @@ SLOW_TESTS = (
     ),
     ids=idfn,
 )
-def test_evm_tools(test_case: Dict) -> None:
+def test_evm_tools(test_case: Dict, capsys) -> None:
     run_evm_tools_test(test_case)
+
+    captured = capsys.readouterr()
+
+    if "this does" in captured.out:
+        sys.stdout.write(test_case["test_file"])

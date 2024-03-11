@@ -36,6 +36,7 @@ def block_hash(evm: Evm) -> None:
     :py:class:`~ethereum.shanghai.vm.exceptions.OutOfGasError`
         If `evm.gas_left` is less than `20`.
     """
+    print("this does")
     # STACK
     block_number = pop(evm.stack)
 

@@ -6,9 +6,12 @@ from typing import Dict, Generator, Optional, Tuple
 
 import pytest
 
+from ethereum.base_types import Uint
+from ethereum.crypto.hash import keccak256
 from ethereum.utils.hexadecimal import hex_to_bytes
 from ethereum_spec_tools.evm_tools import create_parser
 from ethereum_spec_tools.evm_tools.t8n import T8N, t8n_arguments
+from ethereum_spec_tools.evm_tools.utils import parse_hex_or_int
 
 parser = create_parser()
 
@@ -72,10 +75,10 @@ def load_evm_tools_test(test_case: Dict[str, str], fork_name: str) -> None:
         tests = json.load(f)
 
     env = tests[test_key]["env"]
-    try:
-        env["blockHashes"] = {"0": env["previousHash"]}
-    except KeyError:
-        env["blockHashes"] = {}
+    env["blockHashes"] = {
+        "0": "0x"
+        + keccak256(bytes(parse_hex_or_int(env["currentNumber"], Uint))).hex()
+    }
     env["withdrawals"] = []
 
     alloc = tests[test_key]["pre"]

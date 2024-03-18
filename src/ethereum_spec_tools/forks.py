@@ -85,15 +85,19 @@ class Hardfork:
         forks: List[H] = []
 
         for pkg in modules:
-            if isinstance(pkg.module_finder, importlib.abc.MetaPathFinder):
-                found = pkg.module_finder.find_module(pkg.name, None)
+            # Use find_spec() to find the module specification.
+            spec = importlib.util.find_spec(pkg.name)
+            if spec is None:
+                raise Exception(f"unable to find module spec for {pkg.name}")
+
+            # Load the module from the spec.
+            mod = importlib.util.module_from_spec(spec)
+
+            # Execute the module in its namespace.
+            if spec.loader:
+                spec.loader.exec_module(mod)
             else:
-                found = pkg.module_finder.find_module(pkg.name)
-
-            if not found:
-                raise Exception(f"unable to load module {pkg.name}")
-
-            mod = found.load_module(pkg.name)
+                raise Exception(f"No loader found for module {pkg.name}")
 
             if hasattr(mod, "FORK_CRITERIA"):
                 forks.append(cls(mod))

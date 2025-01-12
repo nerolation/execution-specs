@@ -623,7 +623,7 @@ def process_system_transaction(
         traces=[],
         excess_blob_gas=excess_blob_gas,
         blob_versioned_hashes=(),
-        transient_storage=TransientStorage(),
+        transient_storage=TransientStorage()       
     )
 
     system_tx_output = process_message_call(system_tx_message, system_tx_env)
@@ -736,6 +736,7 @@ def apply_body(
         state,
         chain_id,
         excess_blob_gas,
+        block_level_warmed
     )
 
     process_system_transaction(
@@ -751,8 +752,11 @@ def apply_body(
         state,
         chain_id,
         excess_blob_gas,
+        block_level_warmed
     )
 
+    block_level_accessed_addresses = set()
+    block_level_accessed_storage_keys = set()
     for i, tx in enumerate(map(decode_transaction, transactions)):
         trie_set(
             transactions_trie, rlp.encode(Uint(i)), encode_transaction(tx)
@@ -788,10 +792,15 @@ def apply_body(
             excess_blob_gas=excess_blob_gas,
             blob_versioned_hashes=blob_versioned_hashes,
             transient_storage=TransientStorage(),
+            block_level_accessed_addresses=block_level_accessed_addresses,
+            block_level_accessed_storage_keys=block_level_accessed_storage_keys
         )
 
-        gas_used, logs, error = process_transaction(env, tx)
+        gas_used, accessed_addresses, accessed_storage_keys, logs, error = process_transaction(env, tx)
         gas_available -= gas_used
+        
+        block_level_accessed_addresses += accessed_addresses
+        block_level_accessed_storage_keys += accessed_storage_keys
 
         receipt = make_receipt(
             tx, error, (block_gas_limit - gas_available), logs
@@ -949,7 +958,10 @@ def process_transaction(
             preaccessed_addresses.add(address)
             for key in keys:
                 preaccessed_storage_keys.add((address, key))
-
+    
+    preaccessed_addresses.add(env.block_level_accessed_addresses)
+    preaccessed_storage_keys.add(env.block_level_accessed_storage_keys)
+    
     authorizations: Tuple[Authorization, ...] = ()
     if isinstance(tx, SetCodeTransaction):
         authorizations = tx.authorizations
@@ -1014,7 +1026,7 @@ def process_transaction(
 
     destroy_touched_empty_accounts(env.state, output.touched_accounts)
 
-    return total_gas_used, output.logs, output.error
+    return total_gas_used, output.accessed_accounts, output.accessed_storage_keys, output.logs, output.error
 
 
 def calculate_intrinsic_cost(tx: Transaction) -> Tuple[Uint, Uint]:

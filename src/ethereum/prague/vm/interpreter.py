@@ -77,6 +77,8 @@ class MessageCallOutput:
           5. `touched_accounts`: Accounts that have been touched.
           6. `error`: The error from the execution if any.
           7. `return_data`: The output of the execution.
+          8. `accessed_addresses`: Accessed addresses that were warmed.
+          9. `accessed_storage_keys`: Accessed storage keys that were warmed.
     """
 
     gas_left: Uint
@@ -86,6 +88,8 @@ class MessageCallOutput:
     touched_accounts: Iterable[Address]
     error: Optional[Exception]
     return_data: Bytes
+    accessed_addresses: Set[Address]
+    accessed_storage_keys: Set[Address]
 
 
 def process_message_call(
@@ -153,6 +157,8 @@ def process_message_call(
         touched_accounts=touched_accounts,
         error=evm.error,
         return_data=evm.output,
+        accessed_addresses=evm.accessed_addresses,
+        accessed_storage_keys=evm.accessed_storage_keys
     )
 
 

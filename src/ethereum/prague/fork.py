@@ -736,7 +736,6 @@ def apply_body(
         state,
         chain_id,
         excess_blob_gas,
-        block_level_warmed
     )
 
     process_system_transaction(
@@ -752,7 +751,6 @@ def apply_body(
         state,
         chain_id,
         excess_blob_gas,
-        block_level_warmed
     )
 
     block_level_accessed_addresses = set()

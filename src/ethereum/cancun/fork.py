@@ -180,10 +180,10 @@ def state_transition(chain: BlockChain, block: Block) -> None:
 
     (
         sender_addresses, 
-        coinbase_balance_after_upfront_cost,
+        coinbase_balance_after_inclusion_cost,
         total_inclusion_gas,
     ) = check_block_static(chain, block)
-    set_account_balance(chain.state, block.header.coinbase, U256(coinbase_balance_after_upfront_cost))
+    set_account_balance(chain.state, block.header.coinbase, U256(coinbase_balance_after_inclusion_cost))
 
     apply_body_output = apply_body(
         chain.state,
@@ -516,17 +516,17 @@ def check_block_static(
         raise InvalidBlock
 
     blob_gas_price = calculate_blob_gas_price(block.header.excess_blob_gas)
-    upfront_cost = (
+    inclusion_cost = (
         total_inclusion_gas * block.header.base_fee_per_gas
         + total_blob_gas_used * blob_gas_price
     )
     
     coinbase_account = get_account(chain.state, block.header.coinbase)
-    if Uint(coinbase_account.balance) < upfront_cost:
+    if Uint(coinbase_account.balance) < inclusion_cost:
         raise InvalidBlock
 
-    coinbase_balance_after_upfront_cost = (
-        Uint(coinbase_account.balance) - upfront_cost
+    coinbase_balance_after_inclusion_cost = (
+        Uint(coinbase_account.balance) - inclusion_cost
     )
 
     for i, wd in enumerate(block.withdrawals):
@@ -539,7 +539,7 @@ def check_block_static(
     if block.header.blob_gas_used != blob_gas_used:
         raise InvalidBlock
     
-    return sender_addresses, coinbase_balance_after_upfront_cost, total_inclusion_gas
+    return sender_addresses, coinbase_balance_after_inclusion_cost, total_inclusion_gas
     
 
 @dataclass

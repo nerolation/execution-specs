@@ -211,12 +211,7 @@ def calculate_inclusion_gas_cost(tx: Transaction) -> Uint:
         else:
             data_cost += TX_DATA_COST_PER_NON_ZERO
 
-    if tx.to == Bytes0(b""):
-        create_cost = TX_CREATE_COST + int(init_code_cost(Uint(len(tx.data))))
-    else:
-        create_cost = 0
-
-    return Uint(TX_BASE_COST + data_cost + create_cost)
+    return Uint(TX_BASE_COST + data_cost)
 
 
 def calculate_intrinsic_gas_cost(tx: Transaction) -> Uint:
@@ -252,7 +247,12 @@ def calculate_intrinsic_gas_cost(tx: Transaction) -> Uint:
             access_list_cost += TX_ACCESS_LIST_ADDRESS_COST
             access_list_cost += len(keys) * TX_ACCESS_LIST_STORAGE_KEY_COST
 
-    return calculate_inclusion_gas_cost(tx) + access_list_cost
+    if tx.to == Bytes0(b""):
+        create_cost = TX_CREATE_COST + int(init_code_cost(Uint(len(tx.data))))
+    else:
+        create_cost = 0
+
+    return calculate_inclusion_gas_cost(tx) + access_list_cost + create_cost
 
 
 def recover_sender(chain_id: U64, tx: Transaction) -> Address:

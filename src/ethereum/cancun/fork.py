@@ -378,15 +378,15 @@ def check_transaction(
         blob_versioned_hashes = ()
     
     max_additional_fee = (tx.gas - calculate_inclusion_gas_cost(tx)) * base_fee_per_gas
-    should_execute_tx = (
-        tx.gas <= gas_available
-        and sender_account.nonce == tx.nonce
-        and Uint(coinbase_account.balance) >= max_additional_fee
-        and Uint(sender_account.balance) >= Uint(tx.value)
-        and sender_account.code == bytearray()
+    is_tx_skipped = (
+        tx.gas > gas_available
+        or sender_account.nonce != tx.nonce
+        or Uint(coinbase_account.balance) < max_additional_fee
+        or Uint(sender_account.balance) < Uint(tx.value)
+        or sender_account.code != bytearray()
     )
 
-    return should_execute_tx, sender_gas_price, blob_versioned_hashes
+    return is_tx_skipped, sender_gas_price, blob_versioned_hashes
 
 
 def make_receipt(
@@ -694,7 +694,7 @@ def apply_body(
         inclusion_gas_cost = calculate_inclusion_gas_cost(tx)
         gas_available += inclusion_gas_cost
         (
-            should_execute_tx,
+            is_tx_skipped,
             sender_gas_price,
             blob_versioned_hashes,
         ) = check_transaction(
@@ -704,8 +704,10 @@ def apply_body(
             gas_available,
             base_fee_per_gas,
         )
-
-        if should_execute_tx:
+        
+        if is_tx_skipped:
+            gas_available -= inclusion_gas_cost
+        else:
             env = vm.Environment(
                 caller=sender_address,
                 origin=sender_address,
@@ -739,8 +741,6 @@ def apply_body(
             )
 
             block_logs += logs
-        else:
-            gas_available -= inclusion_gas_cost
 
     block_gas_used = block_gas_limit - gas_available
     block_logs_bloom = logs_bloom(block_logs)

@@ -44,7 +44,7 @@ from .transactions import (
     FeeMarketTransaction,
     LegacyTransaction,
     Transaction,
-    calculate_intrinsic_cost,
+    calculate_inclusion_gas_cost,
     decode_transaction,
     encode_transaction,
     recover_sender,
@@ -181,7 +181,7 @@ def state_transition(chain: BlockChain, block: Block) -> None:
     (
         sender_addresses, 
         coinbase_balance_after_upfront_cost,
-        total_intrinsic_gas,
+        total_inclusion_gas,
     ) = check_block_static(chain, block)
     set_account_balance(chain.state, block.header.coinbase, U256(coinbase_balance_after_upfront_cost))
 
@@ -200,7 +200,7 @@ def state_transition(chain: BlockChain, block: Block) -> None:
         block.header.parent_beacon_block_root,
         calculate_excess_blob_gas(parent_header),
         sender_addresses,
-        total_intrinsic_gas,
+        total_inclusion_gas,
     )
 
     chain.last_block_gas_used = apply_body_output.block_gas_used
@@ -329,9 +329,7 @@ def check_transaction(
     sender_address: Address,
     coinbase: Address,
     gas_available: Uint,
-    chain_id: U64,
     base_fee_per_gas: Uint,
-    excess_blob_gas: U64,
 ) -> Tuple[bool, Address, Uint, Tuple[VersionedHash, ...]]:
     """
     Check if the transaction is includable in the block.
@@ -344,17 +342,11 @@ def check_transaction(
         The transaction.
     gas_available :
         The gas remaining in the block.
-    chain_id :
-        The ID of the current chain.
     base_fee_per_gas :
         The block base fee.
-    excess_blob_gas :
-        The excess blob gas.
 
     Returns
     -------
-    sender_address :
-        The sender of the transaction.
     effective_gas_price :
         The price to charge for gas when the transaction is executed.
     blob_versioned_hashes :
@@ -385,7 +377,7 @@ def check_transaction(
     else:
         blob_versioned_hashes = ()
     
-    max_additional_fee = (tx.gas - calculate_intrinsic_cost(tx)) * base_fee_per_gas
+    max_additional_fee = (tx.gas - calculate_inclusion_gas_cost(tx)) * base_fee_per_gas
     should_execute_tx = (
         tx.gas <= gas_available
         and sender_account.nonce == tx.nonce
@@ -394,7 +386,7 @@ def check_transaction(
         and sender_account.code == bytearray()
     )
 
-    return should_execute_tx, sender_address, sender_gas_price, blob_versioned_hashes
+    return should_execute_tx, sender_gas_price, blob_versioned_hashes
 
 
 def make_receipt(
@@ -474,13 +466,13 @@ def check_transaction_static(
             
     sender_address = recover_sender(chain_id, tx)
         
-    return sender_address, calculate_intrinsic_cost(tx), calculate_total_blob_gas(tx)
+    return sender_address, calculate_inclusion_gas_cost(tx), calculate_total_blob_gas(tx)
 
 def check_block_static(
     chain: BlockChain,
     block: Block,
 ) -> Tuple[List[Address], Uint, Uint]:
-    total_intrinsic_gas = Uint(0)
+    total_inclusion_gas = Uint(0)
     total_blob_gas_used = Uint(0)
     transactions_trie: Trie[
         Bytes, Optional[Union[Bytes, LegacyTransaction]]
@@ -503,7 +495,7 @@ def check_block_static(
 
     sender_addresses = []
     for i, tx in enumerate(map(decode_transaction, block.transactions)):
-        sender_address, intrinsic_gas, blob_gas_used = check_transaction_static(
+        sender_address, inclusion_gas, blob_gas_used = check_transaction_static(
             tx, 
             chain.chain_id,
             block.header.base_fee_per_gas, 
@@ -511,21 +503,21 @@ def check_block_static(
             )
         
         sender_addresses.append(sender_address)
-        total_intrinsic_gas += intrinsic_gas
+        total_inclusion_gas += inclusion_gas
         total_blob_gas_used += blob_gas_used
 
         trie_set(
             transactions_trie, rlp.encode(Uint(i)), encode_transaction(tx)
         )
 
-    if total_intrinsic_gas > block.header.gas_limit:
+    if total_inclusion_gas > block.header.gas_limit:
         raise InvalidBlock
     if total_blob_gas_used > MAX_BLOB_GAS_PER_BLOCK:
         raise InvalidBlock
 
     blob_gas_price = calculate_blob_gas_price(block.header.excess_blob_gas)
     upfront_cost = (
-        total_intrinsic_gas * block.header.base_fee_per_gas
+        total_inclusion_gas * block.header.base_fee_per_gas
         + total_blob_gas_used * blob_gas_price
     )
     
@@ -547,7 +539,7 @@ def check_block_static(
     if block.header.blob_gas_used != blob_gas_used:
         raise InvalidBlock
     
-    return sender_addresses, coinbase_balance_after_upfront_cost, total_intrinsic_gas
+    return sender_addresses, coinbase_balance_after_upfront_cost, total_inclusion_gas
     
 
 @dataclass
@@ -595,7 +587,7 @@ def apply_body(
     parent_beacon_block_root: Root,
     excess_blob_gas: U64,
     sender_addresses: List[Address],
-    total_intrinsic_gas: Uint,
+    total_inclusion_gas: Uint,
 ) -> ApplyBodyOutput:
     """
     Executes a block.
@@ -645,7 +637,7 @@ def apply_body(
     apply_body_output : `ApplyBodyOutput`
         Output of applying the block body to the state.
     """
-    gas_available = block_gas_limit - total_intrinsic_gas
+    gas_available = block_gas_limit - total_inclusion_gas
     receipts_trie: Trie[Bytes, Optional[Union[Bytes, Receipt]]] = Trie(
         secured=False, default=None
     )
@@ -699,8 +691,8 @@ def apply_body(
 
     for i, tx in enumerate(map(decode_transaction, transactions)):
         sender_address = sender_addresses[i]
-        intrinsic_gas_cost = calculate_intrinsic_cost(tx)
-        gas_available += intrinsic_gas_cost
+        inclusion_gas_cost = calculate_inclusion_gas_cost(tx)
+        gas_available += inclusion_gas_cost
         (
             should_execute_tx,
             sender_gas_price,
@@ -710,9 +702,7 @@ def apply_body(
             tx,
             sender_address,
             gas_available,
-            chain_id,
             base_fee_per_gas,
-            excess_blob_gas,
         )
 
         if should_execute_tx:
@@ -750,7 +740,7 @@ def apply_body(
 
             block_logs += logs
         else:
-            gas_available -= intrinsic_gas_cost
+            gas_available -= inclusion_gas_cost
 
     block_gas_used = block_gas_limit - gas_available
     block_logs_bloom = logs_bloom(block_logs)
@@ -802,8 +792,8 @@ def process_transaction(
     sender_account = get_account(env.state, sender)
     coinbase_account = get_account(env.state, env.coinbase)
 
-    intrinsic_gas_cost = calculate_intrinsic_cost(tx)
-    gas = tx.gas - intrinsic_gas_cost
+    inclusion_gas_cost = calculate_inclusion_gas_cost(tx)
+    gas = tx.gas - inclusion_gas_cost
     gas_fee = gas * env.base_fee_per_gas
     increment_nonce(env.state, sender)
 

@@ -847,11 +847,11 @@ def process_transaction(
 
     gas_used = tx.gas - output.gas_left
     gas_refund = min(gas_used // Uint(5), Uint(output.refund_counter))
-    gas_refund_amount = (output.gas_left + gas_refund) * env.gas_price
     total_gas_used = gas_used - gas_refund
 
     if sender_pays:
         # refund gas to sender
+        gas_refund_amount = (output.gas_left + gas_refund) * env.gas_price
         sender_balance_after_refund = (
             sender_account.balance
             + U256(gas_refund_amount)
@@ -882,6 +882,8 @@ def process_transaction(
             sender, 
             sender_balance_after_fees,
         )
+
+        gas_refund_amount = (output.gas_left + gas_refund) * env.base_fee_per_gas
 
         # coinbase balance after getting gas refund and fees
         coinbase_balance_after_transaction = (

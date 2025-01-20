@@ -802,16 +802,18 @@ def process_transaction(
 
     if sender_pays:
         blob_gas_fee = calculate_data_fee(env.excess_blob_gas, tx)
-        gas_fee = tx.gas * env.gas_price
+        max_gas_fee = tx.gas * env.gas_price
+        # deduct the max possible tx cost from the sender
         sender_balance_after_gas_fee = (
-            Uint(sender_account.balance) - gas_fee - blob_gas_fee
+            Uint(sender_account.balance) - max_gas_fee - blob_gas_fee
         )
         set_account_balance(env.state, sender, U256(sender_balance_after_gas_fee))
     else:
         inclusion_gas_cost = calculate_inclusion_gas_cost(tx)
-        gas_fee = (tx.gas - inclusion_gas_cost) * env.base_fee_per_gas
+        max_additional_gas_fee = (tx.gas - inclusion_gas_cost) * env.base_fee_per_gas
+        # deduct the max additional tx fee from the coinbase
         coinbase_balance_after_gas_fee = (
-            Uint(coinbase_account.balance) - gas_fee
+            Uint(coinbase_account.balance) - max_additional_gas_fee
         )
         set_account_balance(env.state, env.coinbase, U256(coinbase_balance_after_gas_fee))
 
@@ -858,9 +860,14 @@ def process_transaction(
         )
         set_account_balance(env.state, sender, sender_balance_after_refund)
 
-        # coinbase balance after getting priority fees
+        inclusion_cost_refund = (
+            calculate_inclusion_gas_cost(tx) * env.base_fee_per_gas
+            + calculate_data_fee(env.excess_blob_gas, tx)
+        )
+        # coinbase balance after inclusion cost refund and priority fees
         coinbase_balance_after_transaction = (
             coinbase_account.balance
+            + U256(inclusion_cost_refund)
             + U256(priority_fee)
         )
     else:

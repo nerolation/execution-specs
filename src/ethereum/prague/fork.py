@@ -47,12 +47,12 @@ from .state import (
     state_root,
 )
 from .transactions import (
+    FLOOR_CALLDATA_COST,
+    STANDARD_CALLDATA_TOKEN_COST,
     TX_ACCESS_LIST_ADDRESS_COST,
     TX_ACCESS_LIST_STORAGE_KEY_COST,
     TX_BASE_COST,
     TX_CREATE_COST,
-    TX_DATA_COST_PER_NON_ZERO,
-    TX_DATA_COST_PER_ZERO,
     AccessListTransaction,
     BlobTransaction,
     FeeMarketTransaction,
@@ -90,16 +90,16 @@ BEACON_ROOTS_ADDRESS = hex_to_address(
     "0x000F3df6D732807Ef1319fB7B8bB8522d0Beac02"
 )
 HISTORY_STORAGE_ADDRESS = hex_to_address(
-    "0x0aae40965e6800cd9b1f4b05ff21581047e3f91e"
+    "0x0F792be4B0c0cb4DAE440Ef133E90C0eCD48CCCC"
 )
 WITHDRAWAL_REQUEST_PREDEPLOY_ADDRESS = hex_to_address(
-    "0x09Fc772D0857550724b07B850a4323f39112aAaA"
+    "0x0c15F14308530b7CDB8460094BbB9cC28b9AaaAA"
 )
 CONSOLIDATION_REQUEST_PREDEPLOY_ADDRESS = hex_to_address(
-    "0x01aBEa29659e5e97C95107F20bb753cD3e09bBBb"
+    "0x00431F263cE400f4455c2dCf564e53007Ca4bbBb"
 )
 SYSTEM_TRANSACTION_GAS = Uint(30000000)
-MAX_BLOB_GAS_PER_BLOCK = 786432
+MAX_BLOB_GAS_PER_BLOCK = 1179648
 VERSIONED_HASH_VERSION_KZG = b"\x01"
 HISTORY_SERVE_WINDOW = 8192
 
@@ -396,7 +396,9 @@ def check_transaction(
     InvalidBlock :
         If the transaction is not includable.
     """
-    if calculate_intrinsic_cost(tx) > tx.gas:
+    intrinsic_gas, tokens_in_calldata = calculate_intrinsic_cost(tx)
+    floor = Uint(tokens_in_calldata * FLOOR_CALLDATA_COST + TX_BASE_COST)
+    if max(intrinsic_gas, floor) > tx.gas:
         raise InvalidBlock
     if tx.nonce >= 2**64 - 1:
         raise InvalidBlock
@@ -890,7 +892,8 @@ def process_general_purpose_requests(
     """
     # Requests are to be in ascending order of request type
     requests_from_execution: List[Bytes] = []
-    requests_from_execution.append(DEPOSIT_REQUEST_TYPE + deposit_requests)
+    if len(deposit_requests) > 0:
+        requests_from_execution.append(DEPOSIT_REQUEST_TYPE + deposit_requests)
 
     system_withdrawal_tx_output = process_system_transaction(
         WITHDRAWAL_REQUEST_PREDEPLOY_ADDRESS,
@@ -907,9 +910,10 @@ def process_general_purpose_requests(
         excess_blob_gas,
     )
 
-    requests_from_execution.append(
-        WITHDRAWAL_REQUEST_TYPE + system_withdrawal_tx_output.return_data
-    )
+    if len(system_withdrawal_tx_output.return_data) > 0:
+        requests_from_execution.append(
+            WITHDRAWAL_REQUEST_TYPE + system_withdrawal_tx_output.return_data
+        )
 
     system_consolidation_tx_output = process_system_transaction(
         CONSOLIDATION_REQUEST_PREDEPLOY_ADDRESS,
@@ -926,9 +930,11 @@ def process_general_purpose_requests(
         excess_blob_gas,
     )
 
-    requests_from_execution.append(
-        CONSOLIDATION_REQUEST_TYPE + system_consolidation_tx_output.return_data
-    )
+    if len(system_consolidation_tx_output.return_data) > 0:
+        requests_from_execution.append(
+            CONSOLIDATION_REQUEST_TYPE
+            + system_consolidation_tx_output.return_data
+        )
 
     return requests_from_execution
 
@@ -972,7 +978,9 @@ def process_transaction(
 
     effective_gas_fee = tx.gas * env.gas_price
 
-    gas = tx.gas - calculate_intrinsic_cost(tx)
+    intrinsic_gas, tokens_in_calldata = calculate_intrinsic_cost(tx)
+
+    gas = tx.gas - intrinsic_gas
     increment_nonce(env.state, sender)
 
     sender_balance_after_gas_fee = (
@@ -1015,17 +1023,26 @@ def process_transaction(
 
     output = process_message_call(message, env)
 
-    gas_used = tx.gas - output.gas_left
-    gas_refund = min(gas_used // 5, output.refund_counter)
-    gas_refund_amount = (output.gas_left + gas_refund) * env.gas_price
+    # For EIP-7623 we first calculate the execution_gas_used, which includes
+    # the execution gas refund.
+    execution_gas_used = tx.gas - output.gas_left
+    gas_refund = min(execution_gas_used // 5, output.refund_counter)
+    execution_gas_used -= gas_refund
+
+    # EIP-7623 floor price (note: no EVM costs)
+    floor_gas_cost = Uint(
+        tokens_in_calldata * FLOOR_CALLDATA_COST + TX_BASE_COST
+    )
+    # Transactions with less execution_gas_used than the floor pay at the
+    # floor cost.
+    total_gas_used = max(execution_gas_used, floor_gas_cost)
+
+    output.gas_left = tx.gas - total_gas_used
+    gas_refund_amount = output.gas_left * env.gas_price
 
     # For non-1559 transactions env.gas_price == tx.gas_price
     priority_fee_per_gas = env.gas_price - env.base_fee_per_gas
-    transaction_fee = (
-        tx.gas - output.gas_left - gas_refund
-    ) * priority_fee_per_gas
-
-    total_gas_used = gas_used - gas_refund
+    transaction_fee = total_gas_used * priority_fee_per_gas
 
     # refund gas
     sender_balance_after_refund = (
@@ -1052,7 +1069,7 @@ def process_transaction(
     return total_gas_used, output.logs, output.error
 
 
-def calculate_intrinsic_cost(tx: Transaction) -> Uint:
+def calculate_intrinsic_cost(tx: Transaction) -> Tuple[Uint, Uint]:
     """
     Calculates the gas that is charged before execution is started.
 
@@ -1074,14 +1091,19 @@ def calculate_intrinsic_cost(tx: Transaction) -> Uint:
     -------
     verified : `ethereum.base_types.Uint`
         The intrinsic cost of the transaction.
+    tokens_in_calldata : `ethereum.base_types.Uint`
+        The eip-7623 calldata tokens used by the transaction.
     """
     data_cost = 0
 
+    zero_bytes = 0
     for byte in tx.data:
         if byte == 0:
-            data_cost += TX_DATA_COST_PER_ZERO
-        else:
-            data_cost += TX_DATA_COST_PER_NON_ZERO
+            zero_bytes += 1
+
+    tokens_in_calldata = zero_bytes + (len(tx.data) - zero_bytes) * 4
+
+    data_cost = tokens_in_calldata * STANDARD_CALLDATA_TOKEN_COST
 
     if tx.to == Bytes0(b""):
         create_cost = TX_CREATE_COST + int(init_code_cost(Uint(len(tx.data))))
@@ -1106,8 +1128,15 @@ def calculate_intrinsic_cost(tx: Transaction) -> Uint:
     if isinstance(tx, SetCodeTransaction):
         auth_cost += PER_EMPTY_ACCOUNT_COST * len(tx.authorizations)
 
-    return Uint(
-        TX_BASE_COST + data_cost + create_cost + access_list_cost + auth_cost
+    return (
+        Uint(
+            TX_BASE_COST
+            + data_cost
+            + create_cost
+            + access_list_cost
+            + auth_cost
+        ),
+        Uint(tokens_in_calldata),
     )
 
 

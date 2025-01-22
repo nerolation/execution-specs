@@ -240,7 +240,9 @@ def state_transition(chain: BlockChain, block: Block) -> None:
         raise InvalidBlock
     if apply_body_output.requests_hash != block.header.requests_hash:
         raise InvalidBlock
-
+    if apply_body_output.commitments_root != block.header.commitments_root:
+        raise InvalidBlock
+        
     chain.blocks.append(block)
     if len(chain.blocks) > 255:
         # Real clients have to store more blocks to deal with reorgs, but the
@@ -557,6 +559,7 @@ class ApplyBodyOutput:
     withdrawals_root: Root
     blob_gas_used: Uint
     requests_hash: Bytes
+    commitments_root: Root
 
 
 def process_system_transaction(

@@ -567,8 +567,7 @@ class ApplyBodyOutput:
     withdrawals_root: Root
     blob_gas_used: Uint
     requests_hash: Bytes
-    commitments_root: Root
-
+        
 
 def process_system_transaction(
     target_address: Address,
@@ -886,7 +885,6 @@ def apply_body(
         root(withdrawals_trie),
         blob_gas_used,
         requests_hash,
-        root(commitment_trie),
     )
 
 

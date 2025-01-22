@@ -130,6 +130,18 @@ class SetCodeTransaction:
     y_parity: U256
     r: U256
     s: U256
+        
+@slotted_freezable
+@dataclass
+class SponsorCommitment:
+    """
+ 
+    """
+    data: Bytes64 # This contains the parent_hash and the payload hash
+    v: U256
+    r: U256
+    s: U256
+        
 
 
 Transaction = Union[
@@ -138,6 +150,7 @@ Transaction = Union[
     FeeMarketTransaction,
     BlobTransaction,
     SetCodeTransaction,
+    SponsorCommitment
 ]
 
 
@@ -155,6 +168,8 @@ def encode_transaction(tx: Transaction) -> Union[LegacyTransaction, Bytes]:
         return b"\x03" + rlp.encode(tx)
     elif isinstance(tx, SetCodeTransaction):
         return b"\x04" + rlp.encode(tx)
+    elif isinstance(tx, SetCodeTransaction):
+        return b"\x05" + rlp.encode(tx)
     else:
         raise Exception(f"Unable to encode transaction of type {type(tx)}")
 
@@ -172,6 +187,8 @@ def decode_transaction(tx: Union[LegacyTransaction, Bytes]) -> Transaction:
             return rlp.decode_to(BlobTransaction, tx[1:])
         elif tx[0] == 4:
             return rlp.decode_to(SetCodeTransaction, tx[1:])
+        elif tx[0] == 5:
+            return rlp.decode_to(SponsorCommitment, tx[1:])
         else:
             raise InvalidBlock
     else:

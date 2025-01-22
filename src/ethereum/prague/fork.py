@@ -58,6 +58,7 @@ from .transactions import (
     FeeMarketTransaction,
     LegacyTransaction,
     SetCodeTransaction,
+    SponsorCommitment,
     Transaction,
     decode_transaction,
     encode_transaction,
@@ -353,6 +354,26 @@ def validate_header(header: Header, parent_header: Header) -> None:
 
     block_parent_hash = keccak256(rlp.encode(parent_header))
     if header.parent_hash != block_parent_hash:
+        raise InvalidBlock
+        
+
+def check_commitment(
+    tx: Transaction,
+    parent_hash,
+    tx_root,
+):
+    if not (tx.data[0:32] == parent_hash and tx.data[32:64] == tx_root):
+        raise InvalidBlock
+        
+    
+def check_commitment_signer(
+    state: State,
+    tx: Transaction,
+    chain_id: U64,
+    env
+):
+    sender_address = recover_sender(chain_id, tx)
+    if not env.coinbase == sender_address:
         raise InvalidBlock
 
 
@@ -747,12 +768,26 @@ def apply_body(
         chain_id,
         excess_blob_gas,
     )
-
+    
+    block_is_sponsored = False
     for i, tx in enumerate(map(decode_transaction, transactions)):
+        
+        if i == 0 and isinstance(tx, SponsorCommitment):
+            # if there is such a commitment, then we check if env.coinbase is the signer of that tx
+            # if not, block invalid
+            block_is_sponsored = True
+            check_commitment_signer(
+                state,
+                tx,
+                chain_id,
+                env
+            )
+            continue
+        
         trie_set(
             transactions_trie, rlp.encode(Uint(i)), encode_transaction(tx)
         )
-
+        
         (
             sender_address,
             effective_gas_price,
@@ -805,6 +840,14 @@ def apply_body(
     if blob_gas_used > MAX_BLOB_GAS_PER_BLOCK:
         raise InvalidBlock
     block_gas_used = block_gas_limit - gas_available
+    
+    if block_is_sponsored:
+        # we check that the data that the sponsoring transactions signs over is the parent hash + the transaction trie root
+        commitment = check_commitment(
+            map(decode_transaction, transactions)[0], # tx at index 0
+            block_hashes[-1], # parent hash
+            root(transactions_trie)
+        )
 
     block_logs_bloom = logs_bloom(block_logs)
 

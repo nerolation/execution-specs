@@ -137,20 +137,19 @@ class SponsorCommitment:
     """
  
     """
-    data: Bytes64 # This contains the parent_hash and the payload hash
-    v: U256
+    chain_id: U64
+    data: List[Bytes32, Bytes32] # This contains the parent_hash and the payload hash
+    y_parity: U256
     r: U256
     s: U256
         
-
 
 Transaction = Union[
     LegacyTransaction,
     AccessListTransaction,
     FeeMarketTransaction,
     BlobTransaction,
-    SetCodeTransaction,
-    SponsorCommitment
+    SetCodeTransaction
 ]
 
 

@@ -368,13 +368,14 @@ def check_commitment(
         raise InvalidBlock
         
     
-def check_commitment_signer(
-    tx: Transaction,
+def check_commitment_static(
+    commitment: SponsorCommitment,
     chain_id: U64,
     env
 ):
-    sender_address = recover_sender(chain_id, tx)
-    if not env.coinbase == sender_address:
+    invalid_commitment_length = len(commitment.data) != 64  
+    sender_address = recover_sender(chain_id, commitment)
+    if not env.coinbase == sender_address or invalid_commitment_length:
         raise InvalidBlock
 
 
@@ -1247,6 +1248,10 @@ def recover_sender(chain_id: U64, tx: Transaction) -> Address:
             public_key = secp256k1_recover(
                 r, s, tx.y_parity, signing_hash_7702(tx)
             )
+        elif isinstance(tx, SponsorCommitment):
+            public_key = secp256k1_recover(
+                r, s, tx.y_parity, signing_hash_NEW(tx)
+            )
     except InvalidSignature as e:
         raise InvalidBlock from e
 
@@ -1439,6 +1444,19 @@ def signing_hash_7702(tx: SetCodeTransaction) -> Hash32:
                 tx.data,
                 tx.access_list,
                 tx.authorizations,
+            )
+        )
+    )
+
+def signing_hash_NEW(tx: SponsorCommitment) -> Hash32:
+    """
+    """
+    return keccak256(
+        b"\x05"
+        + rlp.encode(
+            (
+                tx.chain_id,
+                tx.data
             )
         )
     )

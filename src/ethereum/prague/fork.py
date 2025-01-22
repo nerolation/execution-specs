@@ -367,7 +367,6 @@ def check_commitment(
         
     
 def check_commitment_signer(
-    state: State,
     tx: Transaction,
     chain_id: U64,
     env
@@ -736,6 +735,9 @@ def apply_body(
     withdrawals_trie: Trie[Bytes, Optional[Union[Bytes, Withdrawal]]] = Trie(
         secured=False, default=None
     )
+    commitment_trie: Trie[Bytes, Optional[Union[Bytes, SponsorCommitment]]] = Trie(
+        secured=False, default=None
+    )
     block_logs: Tuple[Log, ...] = ()
     deposit_requests: Bytes = b""
 
@@ -772,12 +774,11 @@ def apply_body(
     block_is_sponsored = False
     for i, tx in enumerate(map(decode_transaction, transactions)):
         
-        if i == 0 and isinstance(tx, SponsorCommitment):
+        if i == len(transactions) and isinstance(tx, SponsorCommitment):
             # if there is such a commitment, then we check if env.coinbase is the signer of that tx
             # if not, block invalid
             block_is_sponsored = True
             check_commitment_signer(
-                state,
                 tx,
                 chain_id,
                 env
@@ -844,10 +845,12 @@ def apply_body(
     if block_is_sponsored:
         # we check that the data that the sponsoring transactions signs over is the parent hash + the transaction trie root
         commitment = check_commitment(
-            map(decode_transaction, transactions)[0], # tx at index 0
+            map(decode_transaction, transactions)[-1], # tx at index 0
             block_hashes[-1], # parent hash
             root(transactions_trie)
         )
+        # Write the transaction into its own trie
+        trie_set(commitment_trie, rlp.encode(Uint(0)), transactions[-1])
 
     block_logs_bloom = logs_bloom(block_logs)
 
@@ -884,6 +887,7 @@ def apply_body(
         root(withdrawals_trie),
         blob_gas_used,
         requests_hash,
+        root(commitment_trie),
     )
 
 

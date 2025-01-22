@@ -223,6 +223,7 @@ def state_transition(chain: BlockChain, block: Block) -> None:
         block.withdrawals,
         block.header.parent_beacon_block_root,
         excess_blob_gas,
+        block.header.sponsor_commitment
     )
     if apply_body_output.block_gas_used != block.header.gas_used:
         raise InvalidBlock
@@ -239,8 +240,6 @@ def state_transition(chain: BlockChain, block: Block) -> None:
     if apply_body_output.blob_gas_used != block.header.blob_gas_used:
         raise InvalidBlock
     if apply_body_output.requests_hash != block.header.requests_hash:
-        raise InvalidBlock
-    if apply_body_output.commitments_root != block.header.commitments_root:
         raise InvalidBlock
         
     chain.blocks.append(block)
@@ -360,22 +359,30 @@ def validate_header(header: Header, parent_header: Header) -> None:
         
 
 def check_commitment(
-    tx: Transaction,
-    parent_hash,
-    tx_root,
-):
-    if not (tx.data[0:32] == parent_hash and tx.data[32:64] == tx_root):
-        raise InvalidBlock
-        
-    
-def check_commitment_static(
-    commitment: SponsorCommitment,
     chain_id: U64,
-    env
+    sponsor_commitment: SponsorCommitment,
+    env: vm.Environment
+    parent_hash: Hash32
+    transactions_trie_root: Bytes32
 ):
-    invalid_commitment_length = len(commitment.data) != 64  
-    sender_address = recover_sender(chain_id, commitment)
-    if not env.coinbase == sender_address or invalid_commitment_length:
+    # Check that the commitment has the length of parent hash + transaction trie root.
+    invalid_commitment_length = len(commitment.data) != 64 
+    
+    # Check that commitment references the correct parent and is not replayed later
+    invalid_parent = sponsor_commitment.data[0:32] != parent_hash
+    
+    # Check that that the commitment references the current transaction trie root to prevent replaying with 
+    # different transactions
+    invalid_txs_root = sponsor_commitment.data[32:64] != tx_root
+    
+    if invalid_commitment_length or invalid_parent or invalid_txs_root:
+        raise InvalidBlock
+    
+    # Check that the signer of the sponsoring message is actually the coinbase
+    sponsor_address = recover_sender(chain_id, sponsor_commitment)
+    invalid_sponsor = env.coinbase != sponsor_address
+    
+    if invalid_sponsor:
         raise InvalidBlock
 
 
@@ -679,6 +686,7 @@ def apply_body(
     withdrawals: Tuple[Withdrawal, ...],
     parent_beacon_block_root: Root,
     excess_blob_gas: U64,
+    sponsor_commitment: SponsorCommitment
 ) -> ApplyBodyOutput:
     """
     Executes a block.
@@ -739,9 +747,7 @@ def apply_body(
     withdrawals_trie: Trie[Bytes, Optional[Union[Bytes, Withdrawal]]] = Trie(
         secured=False, default=None
     )
-    commitment_trie: Trie[Bytes, Optional[Union[Bytes, SponsorCommitment]]] = Trie(
-        secured=False, default=None
-    )
+        
     block_logs: Tuple[Log, ...] = ()
     deposit_requests: Bytes = b""
 
@@ -775,19 +781,7 @@ def apply_body(
         excess_blob_gas,
     )
     
-    block_is_sponsored = False
     for i, tx in enumerate(map(decode_transaction, transactions)):
-        
-        if i == len(transactions) and isinstance(tx, SponsorCommitment):
-            # if there is such a commitment, then we check if env.coinbase is the signer of that tx
-            # if not, block invalid
-            block_is_sponsored = True
-            check_commitment_signer(
-                tx,
-                chain_id,
-                env
-            )
-            continue
         
         trie_set(
             transactions_trie, rlp.encode(Uint(i)), encode_transaction(tx)
@@ -842,20 +836,11 @@ def apply_body(
 
         block_logs += logs
         blob_gas_used += calculate_total_blob_gas(tx)
+        
     if blob_gas_used > MAX_BLOB_GAS_PER_BLOCK:
         raise InvalidBlock
     block_gas_used = block_gas_limit - gas_available
-    
-    if block_is_sponsored:
-        # we check that the data that the sponsoring transactions signs over is the parent hash + the transaction trie root
-        commitment = check_commitment(
-            map(decode_transaction, transactions)[-1], # tx at index 0
-            block_hashes[-1], # parent hash
-            root(transactions_trie)
-        )
-        # Write the transaction into its own trie
-        trie_set(commitment_trie, rlp.encode(Uint(0)), transactions[-1])
-
+        
     block_logs_bloom = logs_bloom(block_logs)
 
     for i, wd in enumerate(withdrawals):
@@ -865,6 +850,16 @@ def apply_body(
 
         if account_exists_and_is_empty(state, wd.address):
             destroy_account(state, wd.address)
+            
+    # block_requires_sponsoring is not yet defined
+    if block_requires_sponsoring:
+        commitment = check_commitment(
+            chain_id,
+            sponsor_commitment,
+            env,
+            block_hashes[-1], # parent hash
+            root(transactions_trie)
+        )
 
     requests_from_execution = process_general_purpose_requests(
         deposit_requests,

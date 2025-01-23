@@ -382,8 +382,7 @@ def check_commitment(
     sponsor_address = recover_sender(chain_id, sponsor_commitment)
     invalid_sponsor = env.coinbase != sponsor_address
     
-    if invalid_sponsor:
-        raise InvalidBlock
+    return not invalid_sponsor
 
 
 def check_transaction(
@@ -852,13 +851,15 @@ def apply_body(
             
     # block_requires_sponsoring is not yet defined
     if block_requires_sponsoring:
-        commitment = check_commitment(
+        valid_sponsor = commitment_check_commitment(
             chain_id,
             sponsor_commitment,
             env,
             block_hashes[-1], # parent hash
             root(transactions_trie)
         )
+        if not valid_sponsor:
+            raise InvalidBlock
 
     requests_from_execution = process_general_purpose_requests(
         deposit_requests,

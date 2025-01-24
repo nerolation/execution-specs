@@ -504,6 +504,7 @@ def check_block_static(
         raise InvalidBlock
 
     decoded_transactions = map(decode_transaction, block.transactions)
+    can_exceed_gas_limit = sum(tx.gas for tx in decoded_transactions) > block.header.gas_limit
     blob_gas_price = calculate_blob_gas_price(block.header.excess_blob_gas)
     sender_addresses = []
 
@@ -530,20 +531,18 @@ def check_block_static(
             + blob_gas_used * blob_gas_price
         )
 
-        inclusion_costs[i] = inclusion_cost
-
-    gas_available = block.header.gas_limit - total_inclusion_gas
-    for sender_address in sender_addresses:
         sender_account = get_account(chain.state, sender_address)
         is_sender_funded = Uint(sender_account.balance) >= inclusion_cost
         if (
-            is_transaction_underpriced
+            can_exceed_gas_limit
+            or is_transaction_underpriced
             or not is_sender_funded
-            or tx.gas > gas_available
         ):
             # Coinbase pays for inclusion upfront
-            inclusion_costs[-1] += inclusion_costs[i]
-            inclusion_costs[i] = 0
+            inclusion_costs[0] += inclusion_cost
+        else:
+            # Sender pays for inclusion upfront
+            inclusion_costs[i+1] = inclusion_cost
 
 
     if total_inclusion_gas > block.header.gas_limit:
@@ -552,7 +551,7 @@ def check_block_static(
         raise InvalidBlock
     
     coinbase_account = get_account(chain.state, block.header.coinbase)
-    if Uint(coinbase_account.balance) < inclusion_costs[-1]:
+    if Uint(coinbase_account.balance) < inclusion_costs[0]:
         raise InvalidBlock
 
     for i, wd in enumerate(block.withdrawals):
@@ -724,12 +723,12 @@ def apply_body(
 
     # Deduct all inclusion costs
     coinbase_balance = Uint(get_account(state, coinbase).balance)
-    set_account_balance(state, coinbase, U256(coinbase_balance - inclusion_costs[-1]))
+    set_account_balance(state, coinbase, U256(coinbase_balance - inclusion_costs[0]))
     for i, sender_address in enumerate(sender_addresses):
         sender_balance = Uint(get_account(state, sender_address).balance)
-        if inclusion_costs[i] > 0:
+        if inclusion_costs[i+1] > 0:
             set_account_balance(
-                state, sender_address, U256(sender_balance - U256(inclusion_costs[i]))
+                state, sender_address, U256(sender_balance - U256(inclusion_costs[i+1]))
             )
 
     for i, tx in enumerate(map(decode_transaction, transactions)):
@@ -770,7 +769,7 @@ def apply_body(
                 excess_blob_gas=excess_blob_gas,
                 blob_versioned_hashes=blob_versioned_hashes,
                 transient_storage=TransientStorage(),
-                is_inclusion_sponsored=inclusion_costs[i] == 0,
+                is_inclusion_sponsored=inclusion_costs[i+1] == 0,
             )
 
             gas_used, logs, error = process_transaction(env, tx)

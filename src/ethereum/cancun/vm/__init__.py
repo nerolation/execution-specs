@@ -51,7 +51,6 @@ class Environment:
     excess_blob_gas: U64
     blob_versioned_hashes: Tuple[VersionedHash, ...]
     transient_storage: TransientStorage
-    is_inclusion_sponsored: bool
 
 
 @dataclass

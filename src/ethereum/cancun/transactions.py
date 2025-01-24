@@ -201,6 +201,8 @@ def calculate_inclusion_gas_cost(tx: Transaction) -> Uint:
     verified : `ethereum.base_types.Uint`
         The inclusion cost of the transaction.
     """
+    from .vm.gas import init_code_cost
+
     data_cost = 0
 
     for byte in tx.data:

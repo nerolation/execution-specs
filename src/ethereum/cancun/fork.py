@@ -18,12 +18,13 @@ from typing import List, Optional, Tuple, Union
 from ethereum_types.bytes import Bytes, Bytes32
 from ethereum_types.numeric import U64, U256, Uint
 
+from ethereum.crypto.elliptic_curve import secp256k1_recover
 from ethereum.crypto.hash import Hash32, keccak256
 from ethereum.exceptions import InvalidBlock, InvalidSenderError
 
 from .. import rlp
 from . import vm
-from .blocks import Block, Header, Log, Receipt, Withdrawal
+from .blocks import Block, Header, Log, Receipt, Withdrawal, HeaderSignature
 from .bloom import logs_bloom
 from .fork_types import Address, Bloom, Root, VersionedHash
 from .state import (
@@ -445,8 +446,8 @@ def make_receipt(
 
 
 def check_transaction_static(
-        tx: Transaction,
-        chain_id: U64,
+    tx: Transaction,
+    chain_id: U64,
 ) -> Tuple[Address, Uint, Uint]:
 
     if not validate_transaction(tx):
@@ -494,14 +495,16 @@ def check_block_static(
     if block.ommers != ():
         raise InvalidBlock
 
-    commitment = block.coinbase_commitment
-    if commitment.header_hash != compute_header_hash(block.header):
-        raise InvalidBlock
-    commitment_signer = recover_sender(chain.chain_id, commitment)
-    if block.header.coinbase != commitment_signer:
+    coinbase = block.header.coinbase
+    header_signer = recover_header_signer(
+        chain.chain_id,
+        block.header,
+        block.header_signature,
+    )
+    if coinbase != header_signer:
         raise InvalidBlock
     
-    
+
     sender_addresses = []
     for i, tx in enumerate(map(decode_transaction, block.transactions)):
         sender_address, inclusion_gas, blob_gas_used = check_transaction_static(
@@ -528,7 +531,7 @@ def check_block_static(
         + total_blob_gas_used * blob_gas_price
     )
     
-    coinbase_account = get_account(chain.state, block.header.coinbase)
+    coinbase_account = get_account(chain.state, coinbase)
     if Uint(coinbase_account.balance) < inclusion_cost:
         raise InvalidBlock
 
@@ -1009,12 +1012,12 @@ def check_gas_limit(gas_limit: Uint, parent_gas_limit: Uint) -> bool:
     return True
 
 def can_sender_pay_basefees(
-        state, 
-        tx, 
-        sender, 
-        base_fee_per_gas, 
-        excess_blob_gas
-    ) -> bool:
+    state, 
+    tx, 
+    sender, 
+    base_fee_per_gas, 
+    excess_blob_gas
+) -> bool:
     sender_account = get_account(state, sender)
     blob_gas_price = calculate_blob_gas_price(excess_blob_gas)
 
@@ -1034,3 +1037,29 @@ def can_sender_pay_basefees(
 
     is_transaction_funded = Uint(sender_account.balance) >= max_gas_fee + Uint(tx.value)
     return is_transaction_funded and not is_transaction_underpriced 
+
+
+def recover_header_signer(
+    chain_id: U64,
+    header: Header,
+    header_signature: HeaderSignature
+) -> Address:
+    signing_hash = keccak256(
+        b"\x05"
+        + rlp.encode(
+            (
+                chain_id,
+                compute_header_hash(header),
+            )
+        )
+    )
+    r = header_signature.r
+    s = header_signature.s
+    y_parity = header_signature.y_parity
+
+    public_key = secp256k1_recover(
+            r, s, y_parity, signing_hash
+    )
+
+    return Address(keccak256(public_key)[12:32])
+

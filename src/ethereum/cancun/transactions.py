@@ -17,7 +17,6 @@ from ethereum.exceptions import InvalidSignatureError
 from .. import rlp
 from .exceptions import TransactionTypeError
 from .fork_types import Address, VersionedHash
-from .blocks import CoinbaseCommitment
 
 TX_BASE_COST = 21000
 TX_DATA_COST_PER_NON_ZERO = 16
@@ -114,7 +113,6 @@ Transaction = Union[
     AccessListTransaction,
     FeeMarketTransaction,
     BlobTransaction,
-    CoinbaseCommitment
 ]
 
 
@@ -314,11 +312,6 @@ def recover_sender(chain_id: U64, tx: Transaction) -> Address:
             r, s, tx.y_parity, signing_hash_4844(tx)
         )
 
-    elif isinstance(tx, CoinbaseCommitment):
-        public_key = secp256k1_recover(
-            r, s, tx.y_parity, signing_hash_coinbase_commitment(tx)
-        )
-
     return Address(keccak256(public_key)[12:32])
 
 
@@ -481,29 +474,4 @@ def signing_hash_4844(tx: BlobTransaction) -> Hash32:
 
 
 
-def signing_hash_coinbase_commitment(commitment: CoinbaseCommitment) -> Hash32:
-    """
-    Compute the hash of a transaction used in a EIP-4844 signature.
 
-    Parameters
-    ----------
-    tx :
-        Transaction of interest.
-
-    Returns
-    -------
-    hash : `ethereum.crypto.hash.Hash32`
-        Hash of the transaction.
-    """
-    return keccak256(
-        b"\x05"
-        + rlp.encode(
-            (
-                commitment.chain_id,
-                commitment.header_hash,
-                commitment.y_parity,
-                commitment.r,
-                commitment.s,
-            )
-        )
-    )

@@ -33,16 +33,6 @@ class Withdrawal:
     amount: U256
 
 
-@slotted_freezable
-@dataclass
-class HeaderSignature:
-    """
-    Coinbase's signature on header and chain_id
-    """
-    y_parity: U256
-    r: U256
-    s: U256
-
 
 @slotted_freezable
 @dataclass
@@ -71,6 +61,9 @@ class Header:
     blob_gas_used: U64
     excess_blob_gas: U64
     parent_beacon_block_root: Root
+    y_parity: U256
+    r: U256
+    s: U256
 
 
 @slotted_freezable
@@ -84,7 +77,7 @@ class Block:
     transactions: Tuple[Union[Bytes, LegacyTransaction], ...]
     ommers: Tuple[Header, ...]
     withdrawals: Tuple[Withdrawal, ...]
-    header_signature: HeaderSignature
+
 
 
 @slotted_freezable

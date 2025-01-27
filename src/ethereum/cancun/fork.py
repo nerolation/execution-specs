@@ -24,7 +24,7 @@ from ethereum.exceptions import InvalidBlock, InvalidSenderError
 
 from .. import rlp
 from . import vm
-from .blocks import Block, Header, Log, Receipt, Withdrawal, HeaderSignature
+from .blocks import Block, Header, Log, Receipt, Withdrawal
 from .bloom import logs_bloom
 from .fork_types import Address, Bloom, Root, VersionedHash
 from .state import (
@@ -499,7 +499,6 @@ def check_block_static(
     header_signer = recover_header_signer(
         chain.chain_id,
         block.header,
-        block.header_signature,
     )
     if coinbase != header_signer:
         raise InvalidBlock
@@ -1042,24 +1041,43 @@ def can_sender_pay_basefees(
 def recover_header_signer(
     chain_id: U64,
     header: Header,
-    header_signature: HeaderSignature
 ) -> Address:
+    
     signing_hash = keccak256(
-        b"\x05"
+        b"\x05" 
         + rlp.encode(
             (
                 chain_id,
-                compute_header_hash(header),
+                header.parent_hash,
+                header.ommers_hash,
+                header.coinbase,
+                header.pre_state_root,
+                header.transactions_root,
+                header.parent_receipt_root,
+                header.parent_bloom,
+                header.difficulty,
+                header.number,
+                header.gas_limit,
+                header.parent_gas_used,
+                header.timestamp,
+                header.extra_data,
+                header.prev_randao,
+                header.nonce,
+                header.base_fee_per_gas,
+                header.withdrawals_root,
+                header.blob_gas_used,
+                header.excess_blob_gas,
+                header.parent_beacon_block_root,
             )
         )
     )
-    r = header_signature.r
-    s = header_signature.s
-    y_parity = header_signature.y_parity
+
+    r = header.r
+    s = header.s
+    y_parity = header.y_parity
 
     public_key = secp256k1_recover(
             r, s, y_parity, signing_hash
     )
 
     return Address(keccak256(public_key)[12:32])
-

@@ -183,7 +183,6 @@ def state_transition(chain: BlockChain, block: Block) -> None:
         sender_addresses,
         total_inclusion_gas,
     ) = check_block_static(chain, block)
-    set_account_balance(chain.state, block.header.coinbase, U256())
 
     apply_body_output = apply_body(
         chain.state,
@@ -491,10 +490,18 @@ def check_block_static(
         raise InvalidBlock
     if state_root(chain.state) != block.header.pre_state_root:
         raise InvalidBlock
-    
+
     if block.ommers != ():
         raise InvalidBlock
 
+    commitment = block.coinbase_commitment
+    if commitment.header_hash != compute_header_hash(block.header):
+        raise InvalidBlock
+    commitment_signer = recover_sender(chain.chain_id, commitment)
+    if block.header.coinbase != commitment_signer:
+        raise InvalidBlock
+    
+    
     sender_addresses = []
     for i, tx in enumerate(map(decode_transaction, block.transactions)):
         sender_address, inclusion_gas, blob_gas_used = check_transaction_static(

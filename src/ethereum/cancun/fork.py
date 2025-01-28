@@ -1043,34 +1043,7 @@ def recover_header_signer(
     header: Header,
 ) -> Address:
     
-    signing_hash = keccak256(
-        b"\x05" 
-        + rlp.encode(
-            (
-                chain_id,
-                header.parent_hash,
-                header.ommers_hash,
-                header.coinbase,
-                header.pre_state_root,
-                header.transactions_root,
-                header.parent_receipt_root,
-                header.parent_bloom,
-                header.difficulty,
-                header.number,
-                header.gas_limit,
-                header.parent_gas_used,
-                header.timestamp,
-                header.extra_data,
-                header.prev_randao,
-                header.nonce,
-                header.base_fee_per_gas,
-                header.withdrawals_root,
-                header.blob_gas_used,
-                header.excess_blob_gas,
-                header.parent_beacon_block_root,
-            )
-        )
-    )
+    signing_hash = compute_block_header_signing_hash(chain_id, header)
 
     r = header.r
     s = header.s
@@ -1081,3 +1054,49 @@ def recover_header_signer(
     )
 
     return Address(keccak256(public_key)[12:32])
+
+def eip712_header_struct_hash(chain_id: int, header: Header) -> bytes:
+    """
+ 
+    """
+    # Left-pad to 32:
+    coinbase_32 = header.coinbase.rjust(32, b"\x00")
+
+    # For dynamic 'extra_data', EIP-712 standard approach is to keccak it 
+    # and store that 32-byte hash in the struct.
+    extra_data_hash = keccak256(header.extra_data)
+
+    # For the 8-byte nonce, store as 32 bytes big-endian (or interpret as uint64).
+    nonce_32 = header.nonce.rjust(32, b"\x00")
+
+    return keccak256(
+        b"".join([
+            BLOCK_HEADER_TYPEHASH,
+            chain_id.to_bytes(32, "big"),
+            header.parent_hash,          # already 32 bytes
+            header.ommers_hash,          # 32 bytes
+            coinbase_32,                 # 32 bytes
+            header.pre_state_root,       # 32 bytes
+            header.transactions_root,    # 32 bytes
+            header.parent_receipt_root,  # 32 bytes
+            header.parent_bloom,         # 256-bit bloom => 32 bytes
+            header.difficulty.to_bytes(32, "big"),
+            header.number.to_bytes(32, "big"),
+            header.gas_limit.to_bytes(32, "big"),
+            header.parent_gas_used.to_bytes(32, "big"),
+            header.timestamp.to_bytes(32, "big"),
+            extra_data_hash,             # 32 bytes (hash of the actual extra_data)
+            header.prev_randao,          # 32 bytes
+            nonce_32,                    # 32 bytes for the 8-byte nonce
+            header.base_fee_per_gas.to_bytes(32, "big"),
+            header.withdrawals_root,     # 32 bytes
+            header.blob_gas_used.to_bytes(32, "big"),
+            header.excess_blob_gas.to_bytes(32, "big"),
+            header.parent_beacon_block_root,
+        ])
+    )
+
+def compute_block_header_signing_hash(chain_id: int, header: Header) -> bytes:
+    domain_sep   = eip712_domain_hash(chain_id)
+    header_hash  = eip712_header_struct_hash(chain_id, header)
+    return keccak256(b"\x19\x01" + domain_sep + header_hash)

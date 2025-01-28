@@ -25,6 +25,34 @@ TX_CREATE_COST = 32000
 TX_ACCESS_LIST_ADDRESS_COST = 2400
 TX_ACCESS_LIST_STORAGE_KEY_COST = 1900
 
+EIP712_DOMAIN_TYPEHASH = keccak256(text="EIP712Domain(string name,string version,uint256 chainId)")
+BLOCK_HEADER_TYPEHASH  = keccak256(
+    text=(
+        "BlockHeader("
+        "uint256 chainId,"
+        "bytes32 parentHash,"
+        "bytes32 ommersHash,"
+        "address coinbase,"
+        "bytes32 preStateRoot,"
+        "bytes32 transactionsRoot,"
+        "bytes32 parentReceiptRoot,"
+        "bytes32 parentBloom,"
+        "uint256 difficulty,"
+        "uint256 number,"
+        "uint256 gasLimit,"
+        "uint256 parentGasUsed,"
+        "uint256 timestamp,"
+        "bytes extraData,"
+        "bytes32 prevRandao,"
+        "bytes8 nonce,"
+        "uint256 baseFeePerGas,"
+        "bytes32 withdrawalsRoot,"
+        "uint256 blobGasUsed,"
+        "uint256 excessBlobGas,"
+        "bytes32 parentBeaconBlockRoot"
+        ")"
+    )
+)
 
 @slotted_freezable
 @dataclass
@@ -472,6 +500,18 @@ def signing_hash_4844(tx: BlobTransaction) -> Hash32:
         )
     )
 
+def eip712_domain_hash(chain_id: int) -> bytes:
+    """
+    Minimal domain hash with fields: name, version, chainId.
+    """
+    name = b"EthereumBlockHeader"
+    version = b"1"
 
-
-
+    return keccak256(
+        b"".join([
+            EIP712_DOMAIN_TYPEHASH,
+            keccak256(name),
+            keccak256(version),
+            chain_id.to_bytes(32, "big"),
+        ])
+    )

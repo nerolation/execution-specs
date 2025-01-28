@@ -221,6 +221,32 @@ def validate_transaction(tx: Transaction) -> Tuple[Uint, Uint]:
 
     return intrinsic_gas, calldata_floor_gas_cost
 
+def calculate_inclusion_gas_cost(tx: Transaction) -> Uint:
+    """
+    Calculates the gas that is charged for a transaction that is included,
+    regardless of whether it is executed or skipped.
+
+    Parameters
+    ----------
+    tx :
+        Transaction to compute the intrinsic cost of.
+
+    Returns
+    -------
+    verified : `ethereum.base_types.Uint`
+        The inclusion cost of the transaction.
+    """
+    from .vm.gas import init_code_cost
+
+    data_cost = 0
+
+    for byte in tx.data:
+        if byte == 0:
+            data_cost += TX_DATA_COST_PER_ZERO
+        else:
+            data_cost += TX_DATA_COST_PER_NON_ZERO
+
+    return Uint(TX_BASE_COST + data_cost)
 
 def calculate_intrinsic_cost(tx: Transaction) -> Tuple[Uint, Uint]:
     """

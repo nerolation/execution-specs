@@ -51,7 +51,6 @@ class Header:
     parent_hash: Hash32
     ommers_hash: Hash32
     coinbase: Address
-    state_root: Root
     pre_state_root: Root
     transactions_root: Root
     receipt_root: Root

@@ -404,10 +404,10 @@ def check_transaction(
         base_fee_per_gas,
         excess_blob_gas,
     )
-    max_execution_gas = tx.gas - calculate_inclusion_gas_cost(tx)
-    max_execution_fee = max_execution_gas * base_fee_per_gas
+    max_inclusion_gas = tx.gas - calculate_inclusion_gas_cost(tx)
+    max_inclusion_fee = max_inclusion_gas * base_fee_per_gas
     is_transaction_funded = sender_pays or (
-        Uint(coinbase_account.balance) >= max_execution_fee
+        Uint(coinbase_account.balance) >= max_inclusion_fee
         and Uint(sender_account.balance) >= Uint(tx.value)
     )
 
@@ -1084,17 +1084,17 @@ def process_transaction(
 
     output = process_message_call(message, env)
 
-    # For EIP-7623 we first calculate the execution_gas_used, which includes
+    # For EIP-7623 we first calculate the total_gas_used, which includes
     # the execution gas refund.
-    execution_gas_used = tx.gas - output.gas_left
+    total_gas_used = tx.gas - output.gas_left
     gas_refund = min(
-        execution_gas_used // Uint(5), Uint(output.refund_counter)
+        total_gas_used // Uint(5), Uint(output.refund_counter)
     )
-    execution_gas_used -= gas_refund
+    total_gas_used -= gas_refund
 
-    # Transactions with less execution_gas_used than the floor pay at the
+    # Transactions with less total_gas_used than the floor pay at the
     # floor cost.
-    total_gas_used = max(execution_gas_used, calldata_floor_gas_cost)
+    total_gas_used = max(total_gas_used, calldata_floor_gas_cost)
     output.gas_left = tx.gas - total_gas_used
     if is_execution_sponsored:
         # Sender refunds coinbase up to 

@@ -236,12 +236,12 @@ def calculate_inclusion_gas_cost(tx: Transaction) -> Uint:
     tokens_in_calldata = Uint(zero_bytes + (len(tx.data) - zero_bytes) * 4)
     # EIP-7623 floor price (note: no EVM costs)
     calldata_floor_gas_cost = (
-        tokens_in_calldata * FLOOR_CALLDATA_COST + TX_BASE_COST
+        tokens_in_calldata * FLOOR_CALLDATA_COST
     )
 
     data_cost = tokens_in_calldata * STANDARD_CALLDATA_TOKEN_COST
 
-    return Uint(TX_BASE_COST + data_cost), Uint(calldata_floor_gas_cost)
+    return Uint(TX_BASE_COST + data_cost), Uint(TX_BASE_COST + calldata_floor_gas_cost)
 
 def calculate_intrinsic_gas_cost(tx: Transaction) -> Tuple[Uint, Uint]:
     """
@@ -272,7 +272,7 @@ def calculate_intrinsic_gas_cost(tx: Transaction) -> Tuple[Uint, Uint]:
     from .vm.eoa_delegation import PER_EMPTY_ACCOUNT_COST
     from .vm.gas import init_code_cost
     
-    data_cost, calldata_floor_gas_cost = calculate_inclusion_gas_cost(tx)
+    inclusion_gas, inclusion_gas_floor = calculate_inclusion_gas_cost(tx)
 
     if tx.to == Bytes0(b""):
         create_cost = TX_CREATE_COST + init_code_cost(ulen(tx.data))
@@ -299,13 +299,12 @@ def calculate_intrinsic_gas_cost(tx: Transaction) -> Tuple[Uint, Uint]:
 
     return (
         Uint(
-            TX_BASE_COST
-            + data_cost
+            inclusion_gas
             + create_cost
             + access_list_cost
             + auth_cost
         ),
-        calldata_floor_gas_cost,
+        inclusion_gas_floor,
     )
 
 

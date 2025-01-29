@@ -211,10 +211,39 @@ def validate_transaction(tx: Transaction) -> Tuple[Uint, Uint]:
     if tx.to == Bytes0(b"") and len(tx.data) > 2 * MAX_CODE_SIZE:
         return False
 
-    return intrinsic_gas, calldata_floor_gas_cost
+    return True
 
+def calculate_inclusion_gas_cost(tx: Transaction) -> Uint:
+    """
+    Calculates the gas that is charged for a transaction that is included,
+    regardless of whether it is executed or skipped.
 
-def calculate_intrinsic_cost(tx: Transaction) -> Tuple[Uint, Uint]:
+    Parameters
+    ----------
+    tx :
+        Transaction to compute the intrinsic cost of.
+
+    Returns
+    -------
+    verified : `ethereum.base_types.Uint`
+        The inclusion cost of the transaction.
+    """
+    zero_bytes = 0
+    for byte in tx.data:
+        if byte == 0:
+            zero_bytes += 1
+
+    tokens_in_calldata = Uint(zero_bytes + (len(tx.data) - zero_bytes) * 4)
+    # EIP-7623 floor price (note: no EVM costs)
+    calldata_floor_gas_cost = (
+        tokens_in_calldata * FLOOR_CALLDATA_COST + TX_BASE_COST
+    )
+
+    data_cost = tokens_in_calldata * STANDARD_CALLDATA_TOKEN_COST
+
+    return Uint(TX_BASE_COST + data_cost), calldata_floor_gas_cost
+
+def calculate_intrinsic_gas_cost(tx: Transaction) -> Tuple[Uint, Uint]:
     """
     Calculates the gas that is charged before execution is started.
 
@@ -242,19 +271,8 @@ def calculate_intrinsic_cost(tx: Transaction) -> Tuple[Uint, Uint]:
     """
     from .vm.eoa_delegation import PER_EMPTY_ACCOUNT_COST
     from .vm.gas import init_code_cost
-
-    zero_bytes = 0
-    for byte in tx.data:
-        if byte == 0:
-            zero_bytes += 1
-
-    tokens_in_calldata = Uint(zero_bytes + (len(tx.data) - zero_bytes) * 4)
-    # EIP-7623 floor price (note: no EVM costs)
-    calldata_floor_gas_cost = (
-        tokens_in_calldata * FLOOR_CALLDATA_COST + TX_BASE_COST
-    )
-
-    data_cost = tokens_in_calldata * STANDARD_CALLDATA_TOKEN_COST
+    
+    data_cost, data_floor_cost = calculate_inclusion_gas_cost(tx)
 
     if tx.to == Bytes0(b""):
         create_cost = TX_CREATE_COST + init_code_cost(ulen(tx.data))

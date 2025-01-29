@@ -9,21 +9,21 @@ from typing import Tuple, Union
 from ethereum_rlp import rlp
 from ethereum_types.bytes import Bytes, Bytes0, Bytes32
 from ethereum_types.frozen import slotted_freezable
-from ethereum_types.numeric import U64, U256, Uint, ulen
+from ethereum_types.numeric import U64, U256, Uint
 
 from ethereum.crypto.elliptic_curve import SECP256K1N, secp256k1_recover
 from ethereum.crypto.hash import Hash32, keccak256
-from ethereum.exceptions import InvalidBlock, InvalidSignatureError
+from ethereum.exceptions import InvalidSignatureError
 
 from .exceptions import TransactionTypeError
 from .fork_types import Address, Authorization, VersionedHash
 
-TX_BASE_COST = Uint(21000)
-FLOOR_CALLDATA_COST = Uint(10)
-STANDARD_CALLDATA_TOKEN_COST = Uint(4)
-TX_CREATE_COST = Uint(32000)
-TX_ACCESS_LIST_ADDRESS_COST = Uint(2400)
-TX_ACCESS_LIST_STORAGE_KEY_COST = Uint(1900)
+TX_BASE_COST = 21000
+FLOOR_CALLDATA_COST = 10
+STANDARD_CALLDATA_TOKEN_COST = 4
+TX_CREATE_COST = 32000
+TX_ACCESS_LIST_ADDRESS_COST = 2400
+TX_ACCESS_LIST_STORAGE_KEY_COST = 1900
 
 
 @slotted_freezable
@@ -198,26 +198,18 @@ def validate_transaction(tx: Transaction) -> Tuple[Uint, Uint]:
 
     Returns
     -------
-    intrinsic_gas : `ethereum.base_types.Uint`
-        The intrinsic cost of the transaction.
-    calldata_floor_gas_cost : `ethereum.base_types.Uint`
-        The eip-7623 minimum gas cost charged to the transaction
-        based on the calldata size.
-
-    Raises
-    ------
-    InvalidBlock :
-        If the transaction is not valid.
+    verified : `bool`
+        True if the transaction can be executed, or False otherwise.
     """
     from .vm.interpreter import MAX_CODE_SIZE
 
     intrinsic_gas, calldata_floor_gas_cost = calculate_intrinsic_cost(tx)
     if max(intrinsic_gas, calldata_floor_gas_cost) > tx.gas:
-        raise InvalidBlock
+        return False
     if U256(tx.nonce) >= U256(U64.MAX_VALUE):
-        raise InvalidBlock
+        return False
     if tx.to == Bytes0(b"") and len(tx.data) > 2 * MAX_CODE_SIZE:
-        raise InvalidBlock
+        return False
 
     return intrinsic_gas, calldata_floor_gas_cost
 

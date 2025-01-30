@@ -110,6 +110,7 @@ class BlockChain:
     last_block_gas_used: Uint
     last_receipt_root: Root
     last_block_logs_bloom: Bloom
+    last_requests_hash: Bytes
     
 
 
@@ -568,8 +569,6 @@ class ApplyBodyOutput:
 
     block_gas_used : `ethereum.base_types.Uint`
         Gas used for executing all transactions.
-    transactions_root : `ethereum.fork_types.Root`
-        Trie root of all the transactions in the block.
     receipt_root : `ethereum.fork_types.Root`
         Trie root of all the receipts in the block.
     block_logs_bloom : `Bloom`
@@ -577,10 +576,6 @@ class ApplyBodyOutput:
         block.
     state_root : `ethereum.fork_types.Root`
         State root after all transactions have been executed.
-    withdrawals_root : `ethereum.fork_types.Root`
-        Trie root of all the withdrawals in the block.
-    blob_gas_used : `ethereum.base_types.Uint`
-        Total blob gas used in the block.
     requests_hash : `Bytes`
         Hash of all the requests in the block.
     """

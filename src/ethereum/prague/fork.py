@@ -504,7 +504,7 @@ def check_block_static(
         raise InvalidBlock
     if block.header.parent_bloom != chain.last_block_logs_bloom:
         raise InvalidBlock
-    if block.header.requests_hash != chain.last_requests_hash:
+    if block.header.parent_requests_hash != chain.last_requests_hash:
         raise InvalidBlock
     if block.header.pre_state_root != state_root(chain.state):
         raise InvalidBlock

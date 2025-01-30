@@ -198,9 +198,6 @@ def state_transition(chain: BlockChain, block: Block) -> None:
     block :
         Block to apply to `chain`.
     """
-    parent_header = chain.blocks[-1].header
-    validate_header(block.header, parent_header)
-
     (
         sender_addresses,
         total_inclusion_gas,
@@ -219,6 +216,7 @@ def state_transition(chain: BlockChain, block: Block) -> None:
         chain.chain_id,
         block.withdrawals,
         block.header.parent_beacon_block_root,
+        calculate_excess_blob_gas(chain.blocks[-1].header)
         total_inclusion_gas,
         sender_addresses,
     )
@@ -226,6 +224,7 @@ def state_transition(chain: BlockChain, block: Block) -> None:
     chain.last_block_gas_used = apply_body_output.block_gas_used
     chain.last_block_logs_bloom = apply_body_output.block_logs_bloom
     chain.last_receipt_root = apply_body_output.receipt_root
+    chain.last_requests_hash = apply_body_output.requests_hash
     chain.blocks.append(block)
     if len(chain.blocks) > 255:
         # Real clients have to store more blocks to deal with reorgs, but the
@@ -313,7 +312,6 @@ def validate_header(header: Header, parent_header: Header) -> None:
     parent_header :
         Parent Header of the header to check for correctness
     """
-
     expected_base_fee_per_gas = calculate_base_fee_per_gas(
         header.gas_limit,
         parent_header.gas_limit,
@@ -496,14 +494,21 @@ def check_block_static(
         secured=False, default=None
     )
 
+    parent_header = chain.blocks[-1].header
+    validate_header(block.header, parent_header)
+
+    # validate deferred execution outputs from the parent
     if block.header.parent_gas_used != chain.last_block_gas_used:
         raise InvalidBlock
     if block.header.parent_receipt_root != chain.last_receipt_root:
         raise InvalidBlock
     if block.header.parent_bloom != chain.last_block_logs_bloom:
         raise InvalidBlock
-    if state_root(chain.state) != block.header.pre_state_root:
+    if block.header.requests_hash != chain.last_requests_hash:
         raise InvalidBlock
+    if block.header.pre_state_root != state_root(chain.state):
+        raise InvalidBlock
+
 
     if block.ommers != ():
         raise InvalidBlock
@@ -533,7 +538,6 @@ def check_block_static(
 
     if total_inclusion_gas > block.header.gas_limit:
         raise InvalidBlock
-        
     if total_blob_gas_used > MAX_BLOB_GAS_PER_BLOCK:
         raise InvalidBlock
 

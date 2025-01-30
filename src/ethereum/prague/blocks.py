@@ -53,14 +53,11 @@ class Header:
     coinbase: Address
     pre_state_root: Root
     transactions_root: Root
-    receipt_root: Root
-    bloom: Bloom
     parent_receipt_root: Root
     parent_bloom: Bloom
     difficulty: Uint
     number: Uint
     gas_limit: Uint
-    gas_used: Uint
     parent_gas_used: Uint
     timestamp: U256
     extra_data: Bytes

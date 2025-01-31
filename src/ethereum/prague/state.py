@@ -118,7 +118,7 @@ def commit_transaction(
         The transient storage of the transaction.
     """
     state._snapshots.pop()
-    if not state._snapshots:
+    if len(state._snapshots) == 1:
         state.created_accounts.clear()
 
     # transient storage is not provided when 
@@ -144,7 +144,7 @@ def rollback_transaction(
         The transient storage of the transaction.
     """
     state._main_trie, state._storage_tries = state._snapshots.pop()
-    if len(state._snapshots):
+    if len(state._snapshots) == 1:
         state.created_accounts.clear()
 
     # transient storage is not provided when 

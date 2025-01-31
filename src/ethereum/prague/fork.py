@@ -45,6 +45,9 @@ from .state import (
     process_withdrawal,
     set_account_balance,
     state_root,
+    begin_transaction,
+    commit_transaction,
+    rollback_transaction
 )
 from .transactions import (
     AccessListTransaction,
@@ -793,6 +796,9 @@ def apply_body(
         excess_blob_gas,
     )
 
+    # Take a snapshot of the state before the block's execution
+    begin_transaction(state)
+
     for i, tx in enumerate(decoded_transactions):
         sender_address = sender_addresses[i]
         inclusion_gas = calculate_inclusion_gas_cost(tx)
@@ -861,30 +867,30 @@ def apply_body(
             coinbase,
             U256(coinbase_balance_after_block),
         )
-    # TODO: handle reverting the whole block
-
-    block_logs_bloom = logs_bloom(block_logs)
-
-
-    requests_from_execution = process_general_purpose_requests(
-        deposit_requests,
-        state,
-        block_hashes,
-        coinbase,
-        block_number,
-        base_fee_per_gas,
-        block_gas_limit,
-        block_time,
-        prev_randao,
-        chain_id,
-        excess_blob_gas,
-    )
-
-    requests_hash = compute_requests_hash(requests_from_execution)
+        commit_transaction(state)
+        requests_from_execution = process_general_purpose_requests(
+            deposit_requests,
+            state,
+            block_hashes,
+            coinbase,
+            block_number,
+            base_fee_per_gas,
+            block_gas_limit,
+            block_time,
+            prev_randao,
+            chain_id,
+            excess_blob_gas,
+        )
     else:
-        block_logs_bloom = 
-        requests_hash = b""
+        rollback_transaction(state)
+        block_logs = ()
+        requests_from_execution = []
+        receipts_trie = Trie(secured=False, default=None)
 
+    receipt_root = root(receipts_trie)
+    block_logs_bloom = logs_bloom(block_logs)
+    state_root = state_root(state)
+    requests_hash = compute_requests_hash(requests_from_execution)
 
     for i, wd in enumerate(withdrawals):
         process_withdrawal(state, wd)
@@ -892,13 +898,11 @@ def apply_body(
         if account_exists_and_is_empty(state, wd.address):
             destroy_account(state, wd.address)
 
-
-
     return ApplyBodyOutput(
         block_gas_used,
-        root(receipts_trie),
+        receipt_root,
         block_logs_bloom,
-        state_root(state),
+        state_root,
         requests_hash,
     )
 

@@ -73,7 +73,8 @@ def close_state(state: State) -> None:
 
 
 def begin_transaction(
-    state: State, transient_storage: TransientStorage
+    state: State, 
+    transient_storage: Optional[TransientStorage] = None
 ) -> None:
     """
     Start a state transaction.
@@ -94,13 +95,17 @@ def begin_transaction(
             {k: copy_trie(t) for (k, t) in state._storage_tries.items()},
         )
     )
-    transient_storage._snapshots.append(
-        {k: copy_trie(t) for (k, t) in transient_storage._tries.items()}
-    )
 
+    # transient storage is not provided when 
+    # taking a block level snapshot
+    if transient_storage is not None:
+        transient_storage._snapshots.append(
+            {k: copy_trie(t) for (k, t) in transient_storage._tries.items()}
+        )
 
 def commit_transaction(
-    state: State, transient_storage: TransientStorage
+    state: State, 
+    transient_storage: Optional[TransientStorage] = None
 ) -> None:
     """
     Commit a state transaction.
@@ -116,11 +121,16 @@ def commit_transaction(
     if not state._snapshots:
         state.created_accounts.clear()
 
-    transient_storage._snapshots.pop()
+    # transient storage is not provided when 
+    # doing a block level commit
+    if transient_storage is not None:
+        transient_storage._snapshots.pop()
+
 
 
 def rollback_transaction(
-    state: State, transient_storage: TransientStorage
+    state: State, 
+    transient_storage: Optional[TransientStorage] = None
 ) -> None:
     """
     Rollback a state transaction, resetting the state to the point when the
@@ -134,10 +144,13 @@ def rollback_transaction(
         The transient storage of the transaction.
     """
     state._main_trie, state._storage_tries = state._snapshots.pop()
-    if not state._snapshots:
+    if len(state._snapshots):
         state.created_accounts.clear()
 
-    transient_storage._tries = transient_storage._snapshots.pop()
+    # transient storage is not provided when 
+    # doing a block level rollback
+    if transient_storage is not None:
+        transient_storage._tries = transient_storage._snapshots.pop()
 
 
 def get_account(state: State, address: Address) -> Account:

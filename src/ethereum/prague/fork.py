@@ -345,7 +345,6 @@ def check_transaction(
     state: State,
     tx: Transaction,
     sender_address: Address,
-    coinbase: Address,
     gas_available: Uint,
     base_fee_per_gas: Uint,
 ) -> Tuple[bool, Uint, Tuple[VersionedHash, ...]]:
@@ -811,10 +810,8 @@ def apply_body(
             state,
             tx,
             sender_address,
-            coinbase,
             gas_available,
             base_fee_per_gas,
-            excess_blob_gas,
         )
         
         if is_transaction_skipped:

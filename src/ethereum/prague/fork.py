@@ -68,7 +68,6 @@ from .vm.eoa_delegation import is_valid_delegation
 from .vm.gas import (
     calculate_blob_gas_price,
     calculate_data_fee,
-    calculate_data_base_fee,
     calculate_excess_blob_gas,
     calculate_total_blob_gas,
 )
@@ -397,7 +396,7 @@ def check_transaction(
         or sender_account.nonce != tx.nonce
         or sender_account.code != bytearray()
     )
-    
+
     return is_transaction_skipped, effective_gas_price, blob_versioned_hashes
 
 
@@ -746,7 +745,7 @@ def apply_body(
 
     blob_gas_price = calculate_blob_gas_price(excess_blob_gas)
     decoded_transactions = map(decode_transaction, transactions)
-    total_inclusion_gas = sum(calculate_inclusion_gas_cost(tx) for tx in decoded_transactions)
+    total_inclusion_gas = sum(calculate_inclusion_gas_cost(tx)[1] for tx in decoded_transactions)
     total_blob_gas_used = sum(calculate_total_blob_gas(tx) for tx in decoded_transactions)
     inclusion_cost = (
         total_inclusion_gas * base_fee_per_gas
@@ -1095,7 +1094,7 @@ def process_transaction(
     # floor cost.
     total_gas_used = max(total_gas_used, calldata_floor_gas_cost)
     gas_refund_amount = (tx.gas - total_gas_used) * env.gas_price
-    max_sender_fee -= gas_refund_amount
+    max_sender_fee -= min(gas_refund_amount, max_sender_fee)
     if max_sender_fee < sender_fee:
         refund = sender_fee - max_sender_fee
         sender_balance_after_transaction = (

@@ -40,7 +40,6 @@ from .. import (
 from ..exceptions import OutOfGasError, Revert, WriteInStaticContext
 from ..gas import (
     GAS_CALL_VALUE,
-    GAS_COLD_ACCOUNT_ACCESS,
     GAS_CREATE,
     GAS_KECCAK256_WORD,
     GAS_NEW_ACCOUNT,
@@ -367,11 +366,8 @@ def call(evm: Evm) -> None:
         ],
     )
 
-    if to in evm.accessed_addresses:
-        access_gas_cost = GAS_WARM_ACCESS
-    else:
-        evm.accessed_addresses.add(to)
-        access_gas_cost = GAS_COLD_ACCOUNT_ACCESS
+    access_gas_cost = GAS_WARM_ACCESS
+    evm.accessed_addresses.add(to)
 
     code_address = to
     (
@@ -457,11 +453,8 @@ def callcode(evm: Evm) -> None:
         ],
     )
 
-    if code_address in evm.accessed_addresses:
-        access_gas_cost = GAS_WARM_ACCESS
-    else:
-        evm.accessed_addresses.add(code_address)
-        access_gas_cost = GAS_COLD_ACCOUNT_ACCESS
+    access_gas_cost = GAS_WARM_ACCESS
+    evm.accessed_addresses.add(code_address)
 
     (
         is_delegated_code,
@@ -526,9 +519,7 @@ def selfdestruct(evm: Evm) -> None:
 
     # GAS
     gas_cost = GAS_SELF_DESTRUCT
-    if beneficiary not in evm.accessed_addresses:
-        evm.accessed_addresses.add(beneficiary)
-        gas_cost += GAS_COLD_ACCOUNT_ACCESS
+    evm.accessed_addresses.add(beneficiary)
 
     if (
         not is_account_alive(evm.env.state, beneficiary)
@@ -595,11 +586,8 @@ def delegatecall(evm: Evm) -> None:
         ],
     )
 
-    if code_address in evm.accessed_addresses:
-        access_gas_cost = GAS_WARM_ACCESS
-    else:
-        evm.accessed_addresses.add(code_address)
-        access_gas_cost = GAS_COLD_ACCOUNT_ACCESS
+    access_gas_cost = GAS_WARM_ACCESS
+    evm.accessed_addresses.add(code_address)
 
     (
         is_delegated_code,
@@ -663,11 +651,8 @@ def staticcall(evm: Evm) -> None:
         ],
     )
 
-    if to in evm.accessed_addresses:
-        access_gas_cost = GAS_WARM_ACCESS
-    else:
-        evm.accessed_addresses.add(to)
-        access_gas_cost = GAS_COLD_ACCOUNT_ACCESS
+    access_gas_cost = GAS_WARM_ACCESS
+    evm.accessed_addresses.add(to)
 
     code_address = to
     (

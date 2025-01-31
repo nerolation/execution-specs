@@ -9,7 +9,7 @@ history of all state transitions that have happened since the genesis of the
 chain.
 """
 from dataclasses import dataclass
-from typing import Tuple, Union
+from typing import Tuple, Union, Set
 
 from .. import rlp
 from ..base_types import (
@@ -74,6 +74,8 @@ class Header:
     excess_blob_gas: U64
     parent_beacon_block_root: Root
     requests_root: Root
+    block_level_accessed_addresses: Set
+    block_level_accessed_storage_keys: Set
 
 
 @slotted_freezable

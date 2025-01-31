@@ -49,11 +49,8 @@ def sload(evm: Evm) -> None:
     key = pop(evm.stack).to_be_bytes32()
 
     # GAS
-    if (evm.message.current_target, key) in evm.accessed_storage_keys:
-        charge_gas(evm, GAS_WARM_ACCESS)
-    else:
-        evm.accessed_storage_keys.add((evm.message.current_target, key))
-        charge_gas(evm, GAS_COLD_SLOAD)
+    charge_gas(evm, GAS_WARM_ACCESS)
+    evm.accessed_storage_keys.add((evm.message.current_target, key))
 
     # OPERATION
     value = get_storage(evm.env.state, evm.message.current_target, key)
@@ -83,42 +80,30 @@ def sstore(evm: Evm) -> None:
     original_value = get_storage_original(
         evm.env.state, evm.message.current_target, key
     )
-    current_value = get_storage(evm.env.state, evm.message.current_target, key)
+    # All accesses are warm by default
+    gas_cost = GAS_WARM_ACCESS
 
-    gas_cost = Uint(0)
-
-    if (evm.message.current_target, key) not in evm.accessed_storage_keys:
-        evm.accessed_storage_keys.add((evm.message.current_target, key))
-        gas_cost += GAS_COLD_SLOAD
+    evm.accessed_storage_keys.add((evm.message.current_target, key))
 
     if original_value == current_value and current_value != new_value:
         if original_value == 0:
             gas_cost += GAS_STORAGE_SET
         else:
-            gas_cost += GAS_STORAGE_UPDATE - GAS_COLD_SLOAD
-    else:
-        gas_cost += GAS_WARM_ACCESS
+            gas_cost += GAS_STORAGE_UPDATE
 
     # Refund Counter Calculation
     if current_value != new_value:
         if original_value != 0 and current_value != 0 and new_value == 0:
-            # Storage is cleared for the first time in the transaction
             evm.refund_counter += int(GAS_STORAGE_CLEAR_REFUND)
 
         if original_value != 0 and current_value == 0:
-            # Gas refund issued earlier to be reversed
             evm.refund_counter -= int(GAS_STORAGE_CLEAR_REFUND)
 
         if original_value == new_value:
-            # Storage slot being restored to its original value
             if original_value == 0:
-                # Slot was originally empty and was SET earlier
                 evm.refund_counter += int(GAS_STORAGE_SET - GAS_WARM_ACCESS)
             else:
-                # Slot was originally non-empty and was UPDATED earlier
-                evm.refund_counter += int(
-                    GAS_STORAGE_UPDATE - GAS_COLD_SLOAD - GAS_WARM_ACCESS
-                )
+                evm.refund_counter += int(GAS_STORAGE_UPDATE - GAS_WARM_ACCESS)
 
     charge_gas(evm, gas_cost)
     if evm.message.is_static:

@@ -238,7 +238,11 @@ def state_transition(chain: BlockChain, block: Block) -> None:
         raise InvalidBlock
     if apply_body_output.requests_root != block.header.requests_root:
         raise InvalidBlock
-
+    if apply_body_output.block_level_accessed_addresses != block.header.block_level_accessed_addresses:
+        raise InvalidBlock
+    if apply_body_output.block_level_accessed_storage_keys != block.header.block_level_accessed_storage_keys:
+        raise InvalidBlock
+       
     chain.blocks.append(block)
     if len(chain.blocks) > 255:
         # Real clients have to store more blocks to deal with reorgs, but the
@@ -865,6 +869,8 @@ def apply_body(
         state,
         chain_id,
         excess_blob_gas,
+        block_level_accessed_addresses,
+        block_level_accessed_storage_keys
     )
 
     consolidation_requests = parse_consolidation_requests_from_system_tx(
@@ -888,6 +894,8 @@ def apply_body(
         root(withdrawals_trie),
         blob_gas_used,
         root(requests_trie),
+        block_level_accessed_addresses,
+        block_level_accessed_storage_keys
     )
 
 

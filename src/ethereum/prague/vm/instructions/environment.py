@@ -26,7 +26,6 @@ from ..exceptions import OutOfBoundsRead
 from ..gas import (
     GAS_BASE,
     GAS_BLOBHASH_OPCODE,
-    GAS_COLD_ACCOUNT_ACCESS,
     GAS_COPY,
     GAS_FAST_STEP,
     GAS_RETURN_DATA_COPY,
@@ -76,11 +75,8 @@ def balance(evm: Evm) -> None:
     address = to_address(pop(evm.stack))
 
     # GAS
-    if address in evm.accessed_addresses:
-        charge_gas(evm, GAS_WARM_ACCESS)
-    else:
-        evm.accessed_addresses.add(address)
-        charge_gas(evm, GAS_COLD_ACCOUNT_ACCESS)
+    charge_gas(evm, GAS_WARM_ACCESS)
+    evm.accessed_addresses.add(address)
 
     # OPERATION
     # Non-existent accounts default to EMPTY_ACCOUNT, which has balance 0.
@@ -341,11 +337,8 @@ def extcodesize(evm: Evm) -> None:
     address = to_address(pop(evm.stack))
 
     # GAS
-    if address in evm.accessed_addresses:
-        access_gas_cost = GAS_WARM_ACCESS
-    else:
-        evm.accessed_addresses.add(address)
-        access_gas_cost = GAS_COLD_ACCOUNT_ACCESS
+    charge_gas(evm, GAS_WARM_ACCESS)
+    evm.accessed_addresses.add(address)
 
     _, address, code, designation_access_cost = access_delegation(evm, address)
     access_gas_cost += designation_access_cost
@@ -382,11 +375,8 @@ def extcodecopy(evm: Evm) -> None:
         evm.memory, [(memory_start_index, size)]
     )
 
-    if address in evm.accessed_addresses:
-        access_gas_cost = GAS_WARM_ACCESS
-    else:
-        evm.accessed_addresses.add(address)
-        access_gas_cost = GAS_COLD_ACCOUNT_ACCESS
+    charge_gas(evm, GAS_WARM_ACCESS)
+    evm.accessed_addresses.add(address)
 
     _, address, code, designation_access_cost = access_delegation(evm, address)
     access_gas_cost += designation_access_cost
@@ -470,11 +460,8 @@ def extcodehash(evm: Evm) -> None:
     address = to_address(pop(evm.stack))
 
     # GAS
-    if address in evm.accessed_addresses:
-        access_gas_cost = GAS_WARM_ACCESS
-    else:
-        evm.accessed_addresses.add(address)
-        access_gas_cost = GAS_COLD_ACCOUNT_ACCESS
+    charge_gas(evm, GAS_WARM_ACCESS)
+    evm.accessed_addresses.add(address)
 
     _, address, code, designation_access_cost = access_delegation(evm, address)
     access_gas_cost += designation_access_cost

@@ -198,10 +198,7 @@ def state_transition(chain: BlockChain, block: Block) -> None:
     block :
         Block to apply to `chain`.
     """
-    (
-        sender_addresses,
-        total_inclusion_gas,
-    ) = check_block_static(chain, block)
+    sender_addresses = check_block_static(chain, block)
 
     apply_body_output = apply_body(
         chain.state,
@@ -216,8 +213,7 @@ def state_transition(chain: BlockChain, block: Block) -> None:
         chain.chain_id,
         block.withdrawals,
         block.header.parent_beacon_block_root,
-        calculate_excess_blob_gas(chain.blocks[-1].header)
-        total_inclusion_gas,
+        calculate_excess_blob_gas(chain.blocks[-1].header),
         sender_addresses,
     )
     
@@ -484,7 +480,7 @@ def check_transaction_static(
 def check_block_static(
     chain: BlockChain,
     block: Block,
-) -> Tuple[List[Address], Uint]:
+) -> Tuple[List[Address]]:
     total_inclusion_gas = Uint(0)
     total_blob_gas_used = Uint(0)
     transactions_trie: Trie[
@@ -561,7 +557,7 @@ def check_block_static(
     if block.header.blob_gas_used != blob_gas_used:
         raise InvalidBlock
     
-    return sender_addresses, total_inclusion_gas
+    return sender_addresses
     
 
 @dataclass
@@ -707,7 +703,6 @@ def apply_body(
     withdrawals: Tuple[Withdrawal, ...],
     parent_beacon_block_root: Root,
     excess_blob_gas: U64,
-    total_inclusion_gas: Uint,
     sender_addresses: List[Address],
 ) -> ApplyBodyOutput:
     """
@@ -768,9 +763,10 @@ def apply_body(
         state, BEACON_ROOTS_ADDRESS
     ).code
 
-    # Charge coinbase for inclusion costs
+
     blob_gas_price = calculate_blob_gas_price(excess_blob_gas)
     decoded_transactions = map(decode_transaction, transactions)
+    total_inclusion_gas = sum(calculate_inclusion_gas_cost(tx) for tx in decoded_transactions)
     total_blob_gas_used = sum(calculate_total_blob_gas(tx) for tx in decoded_transactions)
     inclusion_cost = (
         total_inclusion_gas * base_fee_per_gas
@@ -780,6 +776,7 @@ def apply_body(
     coinbase_balance_after_inclusion_cost = (
         Uint(coinbase_account.balance) - inclusion_cost
     )
+    # Charge coinbase for inclusion costs
     set_account_balance(
         env.state,
         env.coinbase,

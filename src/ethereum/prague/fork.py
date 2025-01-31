@@ -1118,7 +1118,6 @@ def process_transaction(
         total_sender_fee = sender_fee + remaining_fee
     set_account_balance(env.state, sender, sender_balance_after_transaction)
 
-    # coinbase balance after sender_fee
     coinbase_balance_after_sender_fee = (
         coinbase_account.balance
         + U256(total_sender_fee)
@@ -1245,6 +1244,7 @@ def recover_header_signer(
                 header.blob_gas_used,
                 header.excess_blob_gas,
                 header.parent_beacon_block_root,
+                header.parent_requests_hash,
             )
         )
     )

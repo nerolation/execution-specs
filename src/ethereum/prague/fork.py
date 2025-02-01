@@ -1035,19 +1035,19 @@ def process_transaction(
     coinbase_account = get_account(env.state, env.coinbase)
     increment_nonce(env.state, sender)
 
-    blob_gas_fee = calculate_data_fee(env.excess_blob_gas, tx)
     max_gas_fee = tx.gas * env.gas_price
-    max_sender_fee = max_gas_fee + blob_gas_fee
-    sender_fee = min(
-        max_sender_fee,
-        Uint(sender_account.balance),
-    )
-    # deduct the max possible tx fee from the sender
-    sender_balance_after_gas_fee = (
-        Uint(sender_account.balance) - sender_fee
-    )
-    set_account_balance(env.state, sender, U256(sender_balance_after_gas_fee))
+    blob_gas_fee = calculate_data_fee(env.excess_blob_gas, tx)
+    max_possible_fee = max_gas_fee + blob_gas_fee
 
+    # Capture the sender's original balance and compute the upfront fee
+    original_sender_balance = Uint(sender_account.balance)
+    upfront_fee = min(max_possible_fee, original_sender_balance)
+
+    # Deduct the upfront fee from the sender's balance
+    set_account_balance(
+        env.state, sender, original_sender_balance - upfront_fee
+    )
+    
     preaccessed_addresses = set()
     preaccessed_storage_keys = set()
     preaccessed_addresses.add(env.coinbase)
@@ -1095,7 +1095,34 @@ def process_transaction(
     # floor cost.
     total_gas_used = max(total_gas_used, calldata_floor_gas_cost)
     gas_refund_amount = (tx.gas - total_gas_used) * env.gas_price
-    max_sender_fee -= min(gas_refund_amount, max_sender_fee)
+    
+     # Compute the effective fee due after refund.
+    effective_fee_due = max_possible_fee - min(gas_refund_amount, max_possible_fee)
+        
+    # Calculate the adjustment relative to the upfront fee.
+    # A negative adjustment means we overcharged (and should refund),
+    # while a positive adjustment means we need to collect more.
+    adjustment = effective_fee_due - upfront_fee
+    
+    # Retrieve the sender's current balance (after the upfront deduction).
+    current_balance = get_account(env.state, sender).balance   
+    
+    if adjustment < 0:
+        # Refund the difference to the sender.
+        refund = -adjustment
+        set_account_balance(env.state, sender, current_balance + refund)
+        final_fee = upfront_fee - refund  # equals effective_fee_due
+    else:
+        # Attempt to charge additional funds if available.
+        additional_charge = min(current_balance, adjustment)
+        set_account_balance(env.state, sender, current_balance - additional_charge)
+        final_fee = upfront_fee + additional_charge
+
+    # Credit the Coinbase with the final fee collected
+    new_coinbase_balance = coinbase_account.balance + U256(final_fee)
+    if new_coinbase_balance != 0:
+        set_account_balance(env.state, env.coinbase, new_coinbase_balance)
+    
     if max_sender_fee < sender_fee:
         refund = sender_fee - max_sender_fee
         sender_balance_after_transaction = (

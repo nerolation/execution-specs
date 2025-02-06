@@ -198,8 +198,8 @@ def state_transition(chain: BlockChain, block: Block) -> None:
     block :
         Block to apply to `chain`.
     """
-    sender_addresses = validate_block(chain, block)
-
+    sender_addresses, not_included_from_inclusion_list = validate_block(chain, block)
+    
     apply_body_output = apply_body(
         chain.state,
         get_last_256_block_hashes(chain),
@@ -215,6 +215,7 @@ def state_transition(chain: BlockChain, block: Block) -> None:
         block.header.parent_beacon_block_root,
         calculate_excess_blob_gas(chain.blocks[-1].header),
         sender_addresses,
+        not_included_from_inclusion_list
     )
     
     chain.last_block_gas_used = apply_body_output.block_gas_used
@@ -403,6 +404,73 @@ def check_transaction(
 
     return is_transaction_skipped, effective_gas_price, blob_versioned_hashes
 
+def transaction_invalid_or_likely_skipped(
+    state: State,
+    tx: Transaction,
+    chain_id: U64,
+    base_fee_per_gas: U64,
+    excess_blob_gas: U64,
+):
+    tx_valid_and_pays_enough = validate_transaction(tx)
+    if tx_valid_and_pays_enough:
+        if isinstance(tx, (FeeMarketTransaction, BlobTransaction, SetCodeTransaction)):
+            if tx.max_fee_per_gas < tx.max_priority_fee_per_gas:
+                tx_valid_and_pays_enough = False
+            if tx.max_fee_per_gas < base_fee_per_gas:
+                tx_valid_and_pays_enough = False
+        else:
+            if tx.gas_price < base_fee_per_gas:
+                tx_valid_and_pays_enough = False
+
+        if isinstance(tx, BlobTransaction):
+            if not isinstance(tx.to, Address):
+                tx_valid_and_pays_enough = False
+            if len(tx.blob_versioned_hashes) == 0:
+                tx_valid_and_pays_enough = False
+            for blob_versioned_hash in tx.blob_versioned_hashes:
+                if blob_versioned_hash[0:1] != VERSIONED_HASH_VERSION_KZG:
+                    tx_valid_and_pays_enough = False
+            blob_gas_price = calculate_blob_gas_price(excess_blob_gas)
+            if Uint(tx.max_fee_per_blob_gas) < blob_gas_price:
+                tx_valid_and_pays_enough = False
+
+        if isinstance(tx, SetCodeTransaction):
+            if not any(tx.authorizations):
+                tx_valid_and_pays_enough = False
+
+        sender_address = recover_sender(chain_id, tx)
+
+        if isinstance(tx, (FeeMarketTransaction, BlobTransaction, SetCodeTransaction)):
+            priority_fee_per_gas = min(
+                tx.max_priority_fee_per_gas,
+                tx.max_fee_per_gas - base_fee_per_gas,
+            )
+            effective_gas_price = priority_fee_per_gas + base_fee_per_gas
+            max_gas_fee = tx.gas * tx.max_fee_per_gas
+        else:
+            effective_gas_price = tx.gas_price
+            max_gas_fee = tx.gas * tx.gas_price
+
+        if isinstance(tx, BlobTransaction):
+            max_gas_fee += calculate_total_blob_gas(tx) * Uint(
+                tx.max_fee_per_blob_gas
+            )
+            blob_versioned_hashes = tx.blob_versioned_hashes
+        else:
+            blob_versioned_hashes = ()
+
+    sender_account = get_account(state, sender_address)
+    is_sender_eoa = (
+        sender_account.code == bytearray() 
+        or is_valid_delegation(sender_account.code)
+    )
+    is_invalid_or_likely_skipped = (
+        not tx_valid_and_pays_enough
+        or Uint(sender_account.balance) < max_gas_fee + Uint(tx.value)
+        or sender_account.nonce != tx.nonce
+        or not is_sender_eoa
+    )
+    return is_invalid_or_likely_skipped 
 
 def make_receipt(
     tx: Transaction,
@@ -437,8 +505,7 @@ def make_receipt(
         logs=logs,
     )
 
-    return encode_receipt(tx, receipt)
-
+    return encode_receipt(tx, receipt) 
 
 def check_transaction_static(
     tx: Transaction,
@@ -480,6 +547,7 @@ def check_transaction_static(
 def validate_block(
     chain: BlockChain,
     block: Block,
+    inclusion_list: Tuple[Union[LegacyTransaction, Bytes], ...],
 ) -> List[Address]:
     total_inclusion_gas = Uint(0)
     total_blob_gas_used = Uint(0)
@@ -518,7 +586,9 @@ def validate_block(
         raise InvalidBlock
     
     sender_addresses = []
-    for i, tx in enumerate(map(decode_transaction, block.transactions)):
+    
+    block_transactions = map(decode_transaction, block.transactions)
+    for i, tx in enumerate(block_transactions):
         sender_address = check_transaction_static(
             tx,
             chain.chain_id,
@@ -535,6 +605,24 @@ def validate_block(
         trie_set(
             transactions_trie, rlp.encode(Uint(i)), encode_transaction(tx)
         )
+    not_included_from_inclusion_list = [tx for tx in inclusion_list if tx not in block_transactions]   
+    if len(not_included_from_inclusion_list) > 0:
+        for tx in not_included_from_inclusion_list:
+            if transaction_invalid_or_likely_skipped(
+                chain.state, 
+                tx, 
+                chain.chain_id, 
+                block.header.base_fee_per_gas,
+                block.header.excess_blob_gas
+            ):
+                not_included_from_inclusion_list.remove(tx)
+                continue # we allow the proposer to not include transactions that are invalid as of the pre-state
+            # Here we allow the proposer to not include transaction, even though they look valid.
+            # Those transactions could be invalidated during execution, thus we have to check them again after execution
+            # The same theoretically applies for transactions where transaction_invalid_or_likely_skipped == True,
+            # however, those transaction can only BECOME valid during execution (receiving funds, increasing nonce) 
+            # and by filtering them out we avoid forcing the block builder to find a position for that tx that makes it valid
+            continue 
 
     if total_inclusion_gas > block.header.gas_limit:
         raise InvalidBlock
@@ -561,7 +649,7 @@ def validate_block(
     if block.header.blob_gas_used != blob_gas_used:
         raise InvalidBlock
     
-    return sender_addresses
+    return sender_addresses, not_included_from_inclusion_list
     
 
 @dataclass
@@ -708,6 +796,7 @@ def apply_body(
     parent_beacon_block_root: Root,
     excess_blob_gas: U64,
     sender_addresses: List[Address],
+    not_included_from_inclusion_list: Tuple[Union[LegacyTransaction, Bytes], ...],
 ) -> ApplyBodyOutput:
     """
     Executes a block.
@@ -775,13 +864,23 @@ def apply_body(
     coinbase_balance_after_inclusion_cost = (
         Uint(coinbase_account.balance) - inclusion_cost
     )
-    # Charge coinbase for inclusion costs
+    
+    gas_available = block_gas_limit - total_inclusion_gas
+    
     set_account_balance(
         env.state,
         env.coinbase,
         U256(coinbase_balance_after_inclusion_cost),
     )
     gas_available = block_gas_limit - total_inclusion_gas
+    
+    # Charge coinbase for inclusion pledge (refunded if inclusion list is obeyed)
+    il_pledge = base_fee_per_gas * (block_gas_limit // 2)
+    set_account_balance(
+        env.state,
+        env.coinbase,
+        U256(Uint(coinbase_account.balance) - il_pledge),
+    )
 
     process_system_transaction(
         BEACON_ROOTS_ADDRESS,
@@ -871,6 +970,26 @@ def apply_body(
 
         if account_exists_and_is_empty(state, wd.address):
             destroy_account(state, wd.address)
+      
+    # Check that all transactions that weren't included either couldn't fit in or were invalid (skipped)
+    il_satisfied = all(
+        tx.gas > gas_available or transaction_invalid_or_likely_skipped(
+            state,
+            tx,
+            chain_id,
+            base_fee_per_gas,
+            excess_blob_gas
+        )
+        for tx in not_included_from_inclusion_list
+    )
+    # Refund the coinbase the `il_pledge` if the IL was obeyed
+    if il_satisfied:
+        coinbase_account = get_account(state, coinbase)
+        set_account_balance(
+            state,
+            coinbase,
+            U256(Uint(coinbase_account.balance) + int(il_pledge))
+        )
 
     requests_from_execution = process_general_purpose_requests(
         deposit_requests,

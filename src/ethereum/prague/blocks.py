@@ -72,6 +72,7 @@ class Header:
     y_parity: U256
     r: U256
     s: U256
+    parent_il_satisfied: Bool
 
 
 @slotted_freezable

@@ -198,7 +198,8 @@ def state_transition(chain: BlockChain, block: Block) -> None:
     block :
         Block to apply to `chain`.
     """
-    sender_addresses = validate_block(chain, block)
+    
+    sender_addresses, transactions_gas, transactions_values = validate_block(chain, block)
 
     apply_body_output = apply_body(
         chain.state,
@@ -215,6 +216,8 @@ def state_transition(chain: BlockChain, block: Block) -> None:
         block.header.parent_beacon_block_root,
         calculate_excess_blob_gas(chain.blocks[-1].header),
         sender_addresses,
+        transactions_gas,
+        transactions_values,
     )
     
     chain.last_block_gas_used = apply_body_output.block_gas_used
@@ -342,7 +345,7 @@ def check_transaction(
     state: State,
     tx: Transaction,
     sender_address: Address,
-    gas_available: Uint,
+    #gas_available: Uint,
     base_fee_per_gas: Uint,
 ) -> Tuple[bool, Tuple[VersionedHash, ...]]:
     """
@@ -395,8 +398,8 @@ def check_transaction(
         or is_valid_delegation(sender_account.code)
     )
     is_transaction_skipped = (
-        tx.gas > gas_available
-        or Uint(sender_account.balance) < max_gas_fee + Uint(tx.value)
+        #tx.gas > gas_available
+        #or Uint(sender_account.balance) < max_gas_fee + Uint(tx.value)
         or sender_account.nonce != tx.nonce
         or not is_sender_eoa
     )
@@ -489,7 +492,7 @@ def validate_block(
     withdrawals_trie: Trie[Bytes, Optional[Union[Bytes, Withdrawal]]] = Trie(
         secured=False, default=None
     )
-
+        
     parent_header = chain.blocks[-1].header
     validate_header(block.header, parent_header)
 
@@ -516,8 +519,29 @@ def validate_block(
     )
     if coinbase != header_signer:
         raise InvalidBlock
+        
+    # If the previous proposer satisfied its inclusion list, we refund the inclusion pledge
+    if block.header.parent_il_satisfied:
+        parent_coinbase_account = get_account(chain.state, parent_header.coinbase)
+        parent_il_pledge = parent_header.base_fee_per_gas * (parent_header.gas_limit // 2)
+        set_account_balance(
+            state,
+            parent_header.coinbase,
+            U256(Uint(parent_coinbase_account.balance) + parent_il_pledge),
+        )    
+        
+    # The coinbase pays an inclusion pledge and might get it back in the next block
+    il_pledge = base_fee_per_gas * (block.header.gas_limit // 2)
+    set_account_balance(
+        state,
+        coinbase,
+        U256(Uint(coinbase_account.balance) - il_pledge),
+    )
     
     sender_addresses = []
+    transactions_gas = []
+    transactions_values = []
+    total_gas_used = 0
     for i, tx in enumerate(map(decode_transaction, block.transactions)):
         sender_address = check_transaction_static(
             tx,
@@ -526,17 +550,41 @@ def validate_block(
             block.header.excess_blob_gas,
         )
         sender_addresses.append(sender_address)
+        
+        effective_gas_price = get_effective_gas_price(tx)
+        
+        tx_total_gas = tx.gas * effective_gas_price
+        transactions_gas.append(tx_total_gas)
+        transactions_values.append(tx.value)
+        
         _, inclusion_gas = calculate_inclusion_gas_cost(tx)
         blob_gas_used = calculate_total_blob_gas(tx)
         
-        total_inclusion_gas += inclusion_gas
+        if isinstance(tx, (FeeMarketTransaction, BlobTransaction, SetCodeTransaction)):
+            priority_fee_per_gas = min(
+                tx.max_priority_fee_per_gas,
+                tx.max_fee_per_gas - base_fee_per_gas,
+            )
+            max_gas_fee = tx.gas * tx.max_fee_per_gas
+        else:
+            max_gas_fee = tx.gas * tx.gas_price
+        
+        sender_account = get_account(state, sender_address)
+        if Uint(sender_account.balance) < max_gas_fee + Uint(tx.value):   
+            raise InvalidBlock
+            
+        total_gas_used += tx_total_gas
         total_blob_gas_used += blob_gas_used
 
         trie_set(
             transactions_trie, rlp.encode(Uint(i)), encode_transaction(tx)
         )
+        
+    decoded_transactions = set(map(decode_transaction, block.transactions))
 
-    if total_inclusion_gas > block.header.gas_limit:
+    coinbase_account = get_account(chain.state, coinbase)
+    
+    if total_gas_used > block.header.gas_limit:
         raise InvalidBlock
     if total_blob_gas_used > MAX_BLOB_GAS_PER_BLOCK:
         raise InvalidBlock
@@ -547,7 +595,6 @@ def validate_block(
         + total_blob_gas_used * blob_gas_price
     )
     
-    coinbase_account = get_account(chain.state, coinbase)
     if Uint(coinbase_account.balance) < inclusion_cost:
         raise InvalidBlock
 
@@ -561,7 +608,7 @@ def validate_block(
     if block.header.blob_gas_used != blob_gas_used:
         raise InvalidBlock
     
-    return sender_addresses
+    return sender_addresses, transactions_gas, transactions_values
     
 
 @dataclass
@@ -708,6 +755,8 @@ def apply_body(
     parent_beacon_block_root: Root,
     excess_blob_gas: U64,
     sender_addresses: List[Address],
+    transactions_gas: List[U256],
+    transactions_values: List[U256],
 ) -> ApplyBodyOutput:
     """
     Executes a block.
@@ -765,8 +814,21 @@ def apply_body(
 
     blob_gas_price = calculate_blob_gas_price(excess_blob_gas)
     decoded_transactions = map(decode_transaction, transactions)
-    total_inclusion_gas = sum(calculate_inclusion_gas_cost(tx)[1] for tx in decoded_transactions)
+    
+    inclusion_gas = [calculate_inclusion_gas_cost(tx)[1] for tx in decoded_transactions]
     total_blob_gas_used = sum(calculate_total_blob_gas(tx) for tx in decoded_transactions)
+   
+    for sender, transaction_gas, inclusion_gas, tx_value in zip(
+        sender_addresses, transactions_gas, total_inclusion_gas, transactions_values
+    ):
+        sender_account = get_account(state, sender)
+        set_account_balance(
+            env.state,
+            sender_account,
+            sender_account.balance - U256(transaction_gas) - tx_value,
+        )           
+    total_inclusion_gas = sum(inclusion_gas)
+    
     inclusion_cost = (
         total_inclusion_gas * base_fee_per_gas
         + total_blob_gas_used * blob_gas_price
@@ -775,13 +837,12 @@ def apply_body(
     coinbase_balance_after_inclusion_cost = (
         Uint(coinbase_account.balance) - inclusion_cost
     )
-    # Charge coinbase for inclusion costs
+     Charge coinbase for inclusion costs
     set_account_balance(
         env.state,
         env.coinbase,
         U256(coinbase_balance_after_inclusion_cost),
-    )
-    gas_available = block_gas_limit - total_inclusion_gas
+    )  
 
     process_system_transaction(
         BEACON_ROOTS_ADDRESS,
@@ -812,11 +873,13 @@ def apply_body(
         chain_id,
         excess_blob_gas,
     )
-
+    
+    gas_available = block_gas_limit - total_inclusion_gas
+    refunds = []
     for i, tx in enumerate(decoded_transactions):
         sender_address = sender_addresses[i]
         inclusion_gas = calculate_inclusion_gas_cost(tx)
-        gas_available += inclusion_gas
+        #gas_available += inclusion_gas
         (
             is_transaction_skipped,
             effective_gas_price,
@@ -825,11 +888,13 @@ def apply_body(
             state,
             tx,
             sender_address,
-            gas_available,
+            #gas_available,
         )
         
         if is_transaction_skipped:
             gas_available -= inclusion_gas
+            refunds.append( (sender_address, tx.gas * effective_gas_price) )
+            
         else:
             env = vm.Environment(
                 caller=sender_address,
@@ -850,9 +915,10 @@ def apply_body(
                 transient_storage=TransientStorage(),
             )
 
-            gas_used, logs, error = process_transaction(env, tx)
-            gas_available -= gas_used
-
+            total_gas_used, tx_refund, logs, error = process_transaction(env, tx)
+            gas_available -= tx.gas
+            refunds.append( (sender_address, tx_refund) )
+            
             receipt = make_receipt(
                 tx, error, (block_gas_limit - gas_available), logs
             )
@@ -885,8 +951,10 @@ def apply_body(
         chain_id,
         excess_blob_gas,
     )
+    
+    process_refunds(state, refunds)
 
-    block_gas_used = block_gas_limit - gas_available
+    block_gas_used = sum([tx.gas for tx in decoded_transactions]) - block_refunds
     receipt_root = root(receipts_trie)
     block_logs_bloom = logs_bloom(block_logs)
     state_root = state_root(state)
@@ -1025,7 +1093,7 @@ def process_transaction(
     logs : `Tuple[ethereum.blocks.Log, ...]`
         Logs generated during execution.
     """
-    intrinsic_gas, calldata_floor_gas_cost = calculate_intrinsic_gas_cost(tx)
+    #intrinsic_gas, calldata_floor_gas_cost = calculate_intrinsic_gas_cost(tx)
     sender = env.origin
     sender_account = get_account(env.state, sender)
     coinbase_account = get_account(env.state, env.coinbase)
@@ -1034,11 +1102,11 @@ def process_transaction(
     max_gas_fee = tx.gas * env.gas_price
     blob_gas_fee = calculate_data_fee(env.excess_blob_gas, tx)
 
-    sender_balance_after_gas_fee = (
-        sender_account.balance
-        - U256(max_gas_fee + blob_gas_fee)
-    )
-    set_account_balance(env.state, sender, sender_balance_after_gas_fee)
+    #sender_balance_after_gas_fee = (
+    #    sender_account.balance
+    #    - U256(max_gas_fee + blob_gas_fee)
+    #)
+    #set_account_balance(env.state, sender, sender_balance_after_gas_fee)
 
     preaccessed_addresses = set()
     preaccessed_storage_keys = set()
@@ -1079,7 +1147,7 @@ def process_transaction(
     # the execution gas refund.
     total_gas_used = tx.gas - output.gas_left
     gas_refund = min(
-        total_gas_used // Uint(5), Uint(output.refund_counter)
+        tx.gas // Uint(5), Uint(output.refund_counter)
     )
     total_gas_used -= gas_refund
 
@@ -1093,11 +1161,11 @@ def process_transaction(
     priority_fee = total_gas_used * priority_fee_per_gas
 
     # refund gas
-    sender_balance_after_refund = (
-        sender_account.balance 
-        + U256(gas_refund_amount)
-    )
-    set_account_balance(env.state, sender, sender_balance_after_refund)
+    #sender_balance_after_refund = (
+    #    sender_account.balance 
+    #    + U256(gas_refund_amount)
+    #)
+    #set_account_balance(env.state, sender, sender_balance_after_refund)
 
     inclusion_cost_refund = (
         calculate_inclusion_gas_cost(tx)[1] * env.base_fee_per_gas
@@ -1122,7 +1190,7 @@ def process_transaction(
 
     destroy_touched_empty_accounts(env.state, output.touched_accounts)
 
-    return total_gas_used, output.logs, output.error
+    return total_gas_used, gas_refund_amount, output.logs, output.error
 
 
 def compute_header_hash(header: Header) -> Hash32:
@@ -1243,3 +1311,24 @@ def recover_header_signer(
     )
 
     return Address(keccak256(public_key)[12:32])
+
+
+def process_refunds(state: State, refunds: List[Tuple]) -> bool:
+    for sender_address, refund in refunds:
+        sender_account = get_account(state, sender_address)
+        sender_balance_after_refund = (
+            sender_account.balance
+            + U256(refund)
+        )
+        set_account_balance(state, sender_address, sender_balance_after_refund)
+        
+def get_effective_gas_price(tx: Transaction):
+    if isinstance(tx, (FeeMarketTransaction, BlobTransaction, SetCodeTransaction)):
+        priority_fee_per_gas = min(
+            tx.max_priority_fee_per_gas,
+            tx.max_fee_per_gas - base_fee_per_gas,
+        )
+        effective_gas_price = priority_fee_per_gas + base_fee_per_gas
+    else:
+        effective_gas_price = tx.gas_price
+    return effective_gas_price

@@ -71,7 +71,7 @@ from .vm.gas import (
 from .vm.interpreter import MessageCallOutput, process_message_call
 
 BASE_FEE_MAX_CHANGE_DENOMINATOR = Uint(8)
-ELASTICITY_MULTIPLIER = Uint(2)
+ELASTICITY_MULTIPLIER = Uint(4)
 GAS_LIMIT_ADJUSTMENT_FACTOR = Uint(1024)
 GAS_LIMIT_MINIMUM = Uint(5000)
 EMPTY_OMMER_HASH = keccak256(rlp.encode([]))
@@ -264,7 +264,7 @@ def calculate_base_fee_per_gas(
     base_fee_per_gas : `Uint`
         Base fee per gas for the block.
     """
-    parent_gas_target = parent_gas_limit // ELASTICITY_MULTIPLIER
+    parent_gas_target = parent_gas_limit * Uint(3) // ELASTICITY_MULTIPLIER
     if not check_gas_limit(block_gas_limit, parent_gas_limit):
         raise InvalidBlock
 
@@ -275,9 +275,9 @@ def calculate_base_fee_per_gas(
 
         parent_fee_gas_delta = parent_base_fee_per_gas * gas_used_delta
         target_fee_gas_delta = parent_fee_gas_delta // parent_gas_target
-
+        
         base_fee_per_gas_delta = max(
-            target_fee_gas_delta // BASE_FEE_MAX_CHANGE_DENOMINATOR,
+            target_fee_gas_delta * Uint(3) // BASE_FEE_MAX_CHANGE_DENOMINATOR,
             Uint(1),
         )
 

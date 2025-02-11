@@ -731,6 +731,26 @@ def apply_body(
         chain_id,
         excess_blob_gas,
     )
+    
+    # If the previous proposer satisfied its inclusion list, we refund the inclusion pledge
+    if block.header.parent_il_satisfied:
+        parent_coinbase_account = get_account(chain.state, parent_header.coinbase)
+        parent_il_pledge = parent_header.base_fee_per_gas * (parent_header.gas_limit // 2)
+        set_account_balance(
+            state,
+            parent_header.coinbase,
+            U256(Uint(parent_coinbase_account.balance) + parent_il_pledge),
+        )    
+        
+    # The coinbase pays an inclusion pledge and might get it back in the next block
+    il_pledge = base_fee_per_gas * (block.header.gas_limit // 2)
+    if il_pledge > Uint(coinbase_account.balance):
+        raise InvalidBlock
+    set_account_balance(
+        state,
+        coinbase,
+        U256(Uint(coinbase_account.balance) - il_pledge),
+    )
 
     for i, tx in enumerate(map(decode_transaction, transactions)):
         trie_set(

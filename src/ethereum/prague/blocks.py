@@ -137,3 +137,11 @@ def decode_receipt(receipt: Union[Bytes, Receipt]) -> Receipt:
         return rlp.decode_to(Receipt, receipt[1:])
     else:
         return receipt
+
+
+def make_empty_receipt() -> Bytes:
+    """
+    Creates a minimal receipt for skipped transactions.
+    Returns a single byte (0x00) as a placeholder.
+    """
+    return b'\x00'

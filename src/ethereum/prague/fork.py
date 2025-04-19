@@ -24,7 +24,7 @@ from ethereum.crypto.hash import Hash32, keccak256
 from ethereum.exceptions import EthereumException, InvalidBlock
 
 from . import vm
-from .blocks import Block, Header, Log, Receipt, Withdrawal, encode_receipt
+from .blocks import Block, Header, Log, Receipt, Withdrawal, encode_receipt, make_empty_receipt
 from .bloom import logs_bloom
 from .fork_types import Address, Authorization, Bloom, Root, VersionedHash
 from .requests import (
@@ -830,6 +830,7 @@ def apply_body(
         
         if is_transaction_skipped:
             gas_available -= inclusion_gas
+            receipt = make_empty_receipt()
         else:
             env = vm.Environment(
                 caller=sender_address,
@@ -857,12 +858,13 @@ def apply_body(
                 tx, error, (block_gas_limit - gas_available), logs
             )
 
-            trie_set(
-                receipts_trie,
-                rlp.encode(Uint(i)),
-                receipt,
-            )
+        trie_set(
+            receipts_trie,
+            rlp.encode(Uint(i)),
+            receipt,
+        )
 
+        if not is_transaction_skipped:
             block_logs += logs
             deposit_requests += parse_deposit_requests_from_receipt(receipt)
 

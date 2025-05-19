@@ -18,6 +18,8 @@ from ethereum.exceptions import InvalidSignatureError, InvalidTransaction
 from .exceptions import TransactionTypeError
 from .fork_types import Address, Authorization, VersionedHash
 
+from .state import set_account_balance
+
 TX_BASE_COST = Uint(21000)
 FLOOR_CALLDATA_COST = Uint(10)
 STANDARD_CALLDATA_TOKEN_COST = Uint(4)
@@ -591,3 +593,12 @@ def get_transaction_hash(tx: Union[Bytes, LegacyTransaction]) -> Hash32:
         return keccak256(rlp.encode(tx))
     else:
         return keccak256(tx)
+    
+def deduct_transation_fees(
+    block_env: vm.BlockEnvironment,
+    sender: Address,
+    sender_balance: Uint,
+) -> None:
+    set_account_balance(
+        block_env.state, sender, sender_balance
+    )

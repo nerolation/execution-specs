@@ -40,6 +40,7 @@ class BlockEnvironment:
     chain_id: U64
     state: State
     block_gas_limit: Uint
+    block_gas_used: Uint
     block_hashes: List[Hash32]
     coinbase: Address
     number: Uint

@@ -20,6 +20,10 @@ from ...state import (
     set_storage,
     set_transient_storage,
 )
+from ...state_tracking import (
+    get_storage_with_tracking,
+    set_storage_with_tracking,
+)
 from .. import Evm
 from ..exceptions import OutOfGasError, WriteInStaticContext
 from ..gas import (
@@ -56,8 +60,9 @@ def sload(evm: Evm) -> None:
         charge_gas(evm, GAS_COLD_SLOAD)
 
     # OPERATION
-    value = get_storage(
-        evm.message.block_env.state, evm.message.current_target, key
+    # EIP-7928: Use tracking wrapper
+    value = get_storage_with_tracking(
+        evm, evm.message.current_target, key
     )
 
     push(evm.stack, value)
@@ -126,7 +131,9 @@ def sstore(evm: Evm) -> None:
     charge_gas(evm, gas_cost)
     if evm.message.is_static:
         raise WriteInStaticContext
-    set_storage(state, evm.message.current_target, key, new_value)
+    
+    # EIP-7928: Use tracking wrapper
+    set_storage_with_tracking(evm, evm.message.current_target, key, new_value)
 
     # PROGRAM COUNTER
     evm.pc += Uint(1)

@@ -13,7 +13,7 @@ Entry point for the Ethereum specification.
 """
 
 from dataclasses import dataclass
-from typing import List, Optional, Tuple, Union
+from typing import Dict, List, Optional, Tuple, Union
 
 from ethereum_rlp import rlp
 from ethereum_types.bytes import Bytes
@@ -27,6 +27,20 @@ from ethereum.exceptions import (
 )
 
 from . import vm
+from .bal_types import (
+    AccountAccess,
+    AccountBalanceDiff,
+    AccountNonce,
+    BalanceChange,
+    BlockAccessList,
+    BalanceDiffs,
+    NonceDiffs,
+    PerTxAccess,
+    SlotAccess,
+    StorageKey,
+    StorageValue,
+    TxIndex,
+)
 from .blocks import Block, Header, Log, Receipt, Withdrawal, encode_receipt
 from .bloom import logs_bloom
 from .fork_types import Account, Address, Authorization, VersionedHash
@@ -172,6 +186,232 @@ def get_last_256_block_hashes(chain: BlockChain) -> List[Hash32]:
     return recent_block_hashes
 
 
+def validate_block_access_list(
+    block: Block, block_output: vm.BlockOutput
+) -> None:
+    """
+    Validate that the block access list matches the computed access patterns.
+
+    Parameters
+    ----------
+    block :
+        The block containing the declared access list.
+    block_output :
+        The output from executing the block.
+    """
+    # Build computed access list from block_output
+    computed_bal: Dict[Address, Dict[StorageKey, List[PerTxAccess]]] = {}
+    
+    # Add storage accesses
+    for (address, slot), accesses in block_output.accessed_items.items():
+        if address not in computed_bal:
+            computed_bal[address] = {}
+        
+        slot_accesses = []
+        for tx_index, is_write, value in accesses:
+            if is_write:
+                slot_accesses.append(
+                    PerTxAccess(tx_index=TxIndex(tx_index), value_after=value)
+                )
+        
+        # Only add if there are writes (reads have empty accesses list)
+        if slot_accesses:
+            computed_bal[address][slot] = slot_accesses
+    
+    # Add all accessed addresses (including those with only account access, no storage)
+    for address in block_output.accessed_addresses:
+        if address not in computed_bal:
+            computed_bal[address] = {}
+    
+    # Add code deployments
+    for address, code in block_output.code_changes.items():
+        if address not in computed_bal:
+            computed_bal[address] = {}
+    
+    # Compare with declared BAL
+    declared_addresses = {acc.address for acc in block.block_access_list}
+    computed_addresses = set(computed_bal.keys())
+    
+    if declared_addresses != computed_addresses:
+        raise InvalidBlock(
+            f"Mismatch in accessed addresses. "
+            f"Declared: {declared_addresses}, Computed: {computed_addresses}"
+        )
+    
+    # Detailed validation per address
+    for account_access in block.block_access_list:
+        addr = account_access.address
+        if addr not in computed_bal:
+            raise InvalidBlock(f"Address {addr} not accessed during execution")
+        
+        # Check code if present
+        if account_access.code is not None:
+            if addr not in block_output.code_changes:
+                raise InvalidBlock(f"Code declared for {addr} but not deployed")
+            if account_access.code != block_output.code_changes[addr]:
+                raise InvalidBlock(f"Code mismatch for {addr}")
+        
+        # Check storage accesses
+        declared_slots = {sa.slot: sa for sa in account_access.accesses}
+        computed_slots = computed_bal.get(addr, {})
+        
+        # Check that all declared slots are in computed
+        for slot, slot_access in declared_slots.items():
+            if slot not in computed_slots and slot_access.accesses:
+                raise InvalidBlock(f"Slot {slot} not accessed for {addr}")
+            
+            if slot in computed_slots:
+                # Compare write accesses
+                computed_accesses = computed_slots[slot]
+                if len(slot_access.accesses) != len(computed_accesses):
+                    raise InvalidBlock(
+                        f"Access count mismatch for {addr}:{slot}"
+                    )
+                
+                for i, (decl, comp) in enumerate(
+                    zip(slot_access.accesses, computed_accesses)
+                ):
+                    if decl.tx_index != comp.tx_index:
+                        raise InvalidBlock(
+                            f"Transaction index mismatch for {addr}:{slot}"
+                        )
+                    if decl.value_after != comp.value_after:
+                        raise InvalidBlock(
+                            f"Value mismatch for {addr}:{slot}"
+                        )
+        
+        # Check that all computed slots are in declared
+        for slot in computed_slots:
+            if slot not in declared_slots:
+                raise InvalidBlock(
+                    f"Computed slot {slot} for {addr} not in declared BAL"
+                )
+
+
+def validate_balance_diffs(
+    block: Block, block_output: vm.BlockOutput
+) -> None:
+    """
+    Validate that the balance diffs match the computed balance changes.
+
+    Parameters
+    ----------
+    block :
+        The block containing the declared balance diffs.
+    block_output :
+        The output from executing the block.
+    """
+    # Compare declared vs computed balance changes
+    declared_addrs = {bd.address for bd in block.balance_diffs}
+    computed_addrs = set(block_output.balance_changes.keys())
+    
+    if declared_addrs != computed_addrs:
+        raise InvalidBlock("Mismatch in addresses with balance changes")
+    
+    for balance_diff in block.balance_diffs:
+        addr = balance_diff.address
+        computed_changes = block_output.balance_changes.get(addr, [])
+        
+        if len(balance_diff.changes) != len(computed_changes):
+            raise InvalidBlock(f"Balance change count mismatch for {addr}")
+        
+        for decl_change, (tx_idx, delta) in zip(
+            balance_diff.changes, computed_changes
+        ):
+            if decl_change.tx_index != TxIndex(tx_idx):
+                raise InvalidBlock(f"Transaction index mismatch for {addr}")
+            if decl_change.delta != delta:
+                raise InvalidBlock(f"Balance delta mismatch for {addr}")
+
+
+def validate_nonce_diffs(
+    block: Block, block_output: vm.BlockOutput
+) -> None:
+    """
+    Validate that the nonce diffs match the computed nonce changes.
+
+    Parameters
+    ----------
+    block :
+        The block containing the declared nonce diffs.
+    block_output :
+        The output from executing the block.
+    """
+    # Compare declared vs computed nonce changes
+    declared_addrs = {nd.address for nd in block.nonce_diffs}
+    computed_addrs = set(block_output.nonce_changes.keys())
+    
+    if declared_addrs != computed_addrs:
+        raise InvalidBlock("Mismatch in addresses with nonce changes")
+    
+    for nonce_diff in block.nonce_diffs:
+        addr = nonce_diff.address
+        computed_nonce = block_output.nonce_changes.get(addr)
+        
+        if computed_nonce is None:
+            raise InvalidBlock(f"No nonce change computed for {addr}")
+        
+        if nonce_diff.nonce_before != computed_nonce:
+            raise InvalidBlock(f"Nonce mismatch for {addr}")
+
+
+def compute_bal_root(bal: BlockAccessList) -> Hash32:
+    """
+    Compute the root hash of the block access list.
+    
+    Parameters
+    ----------
+    bal :
+        The block access list.
+        
+    Returns
+    -------
+    root : Hash32
+        The root hash of the BAL.
+    """
+    # TODO: Implement proper SSZ encoding and merkleization
+    # For now, use RLP encoding as placeholder
+    return keccak256(rlp.encode(bal))
+
+
+def compute_balance_diffs_root(balance_diffs: BalanceDiffs) -> Hash32:
+    """
+    Compute the root hash of the balance diffs.
+    
+    Parameters
+    ----------
+    balance_diffs :
+        The balance diffs.
+        
+    Returns
+    -------
+    root : Hash32
+        The root hash of the balance diffs.
+    """
+    # TODO: Implement proper SSZ encoding and merkleization
+    # For now, use RLP encoding as placeholder
+    return keccak256(rlp.encode(balance_diffs))
+
+
+def compute_nonce_diffs_root(nonce_diffs: NonceDiffs) -> Hash32:
+    """
+    Compute the root hash of the nonce diffs.
+    
+    Parameters
+    ----------
+    nonce_diffs :
+        The nonce diffs.
+        
+    Returns
+    -------
+    root : Hash32
+        The root hash of the nonce diffs.
+    """
+    # TODO: Implement proper SSZ encoding and merkleization
+    # For now, use RLP encoding as placeholder
+    return keccak256(rlp.encode(nonce_diffs))
+
+
 def state_transition(chain: BlockChain, block: Block) -> None:
     """
     Attempts to apply a block to an existing block chain.
@@ -224,6 +464,16 @@ def state_transition(chain: BlockChain, block: Block) -> None:
     withdrawals_root = root(block_output.withdrawals_trie)
     requests_hash = compute_requests_hash(block_output.requests)
 
+    # EIP-7928: Validate block access list, balance diffs, and nonce diffs
+    validate_block_access_list(block, block_output)
+    validate_balance_diffs(block, block_output)
+    validate_nonce_diffs(block, block_output)
+
+    # Compute roots for BAL data
+    bal_root = compute_bal_root(block.block_access_list)
+    balance_diffs_root = compute_balance_diffs_root(block.balance_diffs)
+    nonce_diffs_root = compute_nonce_diffs_root(block.nonce_diffs)
+
     if block_output.block_gas_used != block.header.gas_used:
         raise InvalidBlock(
             f"{block_output.block_gas_used} != {block.header.gas_used}"
@@ -242,6 +492,14 @@ def state_transition(chain: BlockChain, block: Block) -> None:
         raise InvalidBlock
     if requests_hash != block.header.requests_hash:
         raise InvalidBlock
+    
+    # EIP-7928: Validate BAL roots
+    if bal_root != block.header.bal_root:
+        raise InvalidBlock("Mismatch in block access list root")
+    if balance_diffs_root != block.header.balance_diffs_root:
+        raise InvalidBlock("Mismatch in balance diffs root")
+    if nonce_diffs_root != block.header.nonce_diffs_root:
+        raise InvalidBlock("Mismatch in nonce diffs root")
 
     chain.blocks.append(block)
     if len(chain.blocks) > 255:
@@ -689,6 +947,10 @@ def apply_body(
         The block output for the current block.
     """
     block_output = vm.BlockOutput()
+    
+    # EIP-7928: Create BAL tracker
+    from .bal_tracker import BalTracker
+    block_env.bal_tracker = BalTracker()
 
     process_unchecked_system_transaction(
         block_env=block_env,
@@ -703,7 +965,15 @@ def apply_body(
     )
 
     for i, tx in enumerate(map(decode_transaction, transactions)):
+        # EIP-7928: Start tracking for this transaction
+        if block_env.bal_tracker:
+            block_env.bal_tracker.start_transaction(Uint(i))
+        
         process_transaction(block_env, block_output, tx, Uint(i))
+        
+        # EIP-7928: End tracking for this transaction
+        if block_env.bal_tracker:
+            block_env.bal_tracker.end_transaction()
 
     process_withdrawals(block_env, block_output, withdrawals)
 
@@ -711,6 +981,14 @@ def apply_body(
         block_env=block_env,
         block_output=block_output,
     )
+    
+    # EIP-7928: Copy tracked data to block output
+    if block_env.bal_tracker:
+        block_output.accessed_items = dict(block_env.bal_tracker.storage_accesses)
+        block_output.balance_changes = dict(block_env.bal_tracker.balance_changes)
+        block_output.nonce_changes = dict(block_env.bal_tracker.initial_nonces)
+        block_output.code_changes = dict(block_env.bal_tracker.code_deployments)
+        block_output.accessed_addresses = block_env.bal_tracker.accessed_addresses
 
     return block_output
 
@@ -757,6 +1035,32 @@ def process_general_purpose_requests(
             CONSOLIDATION_REQUEST_TYPE
             + system_consolidation_tx_output.return_data
         )
+
+
+def track_and_set_balance(
+    block_env: vm.BlockEnvironment,
+    address: Address,
+    new_balance: U256,
+) -> None:
+    """
+    Set account balance and track the change for EIP-7928.
+    
+    Parameters
+    ----------
+    block_env :
+        The block environment containing the BAL tracker.
+    address :
+        The address whose balance is being changed.
+    new_balance :
+        The new balance to set.
+    """
+    if block_env.bal_tracker:
+        old_balance = get_account(block_env.state, address).balance
+        block_env.bal_tracker.track_balance_change(
+            block_env.state, address, old_balance, new_balance
+        )
+    
+    set_account_balance(block_env.state, address, new_balance)
 
 
 def process_transaction(
@@ -817,13 +1121,17 @@ def process_transaction(
     effective_gas_fee = tx.gas * effective_gas_price
 
     gas = tx.gas - intrinsic_gas
+    
+    # Regular nonce increment - no tracking needed for non-CREATE operations
     increment_nonce(block_env.state, sender)
 
     sender_balance_after_gas_fee = (
         Uint(sender_account.balance) - effective_gas_fee - blob_gas_fee
     )
-    set_account_balance(
-        block_env.state, sender, U256(sender_balance_after_gas_fee)
+    
+    # EIP-7928: Track balance change for gas payment
+    track_and_set_balance(
+        block_env, sender, U256(sender_balance_after_gas_fee)
     )
 
     access_list_addresses = set()
@@ -890,15 +1198,18 @@ def process_transaction(
     sender_balance_after_refund = get_account(
         block_env.state, sender
     ).balance + U256(gas_refund_amount)
-    set_account_balance(block_env.state, sender, sender_balance_after_refund)
+    
+    # EIP-7928: Track balance change for gas refund
+    track_and_set_balance(block_env, sender, sender_balance_after_refund)
 
     # transfer miner fees
     coinbase_balance_after_mining_fee = get_account(
         block_env.state, block_env.coinbase
     ).balance + U256(transaction_fee)
     if coinbase_balance_after_mining_fee != 0:
-        set_account_balance(
-            block_env.state,
+        # EIP-7928: Track balance change for miner fee
+        track_and_set_balance(
+            block_env,
             block_env.coinbase,
             coinbase_balance_after_mining_fee,
         )
@@ -945,6 +1256,14 @@ def process_withdrawals(
             rlp.encode(Uint(i)),
             rlp.encode(wd),
         )
+        
+        # EIP-7928: Track balance change for withdrawal
+        if block_env.bal_tracker:
+            old_balance = get_account(block_env.state, wd.address).balance
+            new_balance = old_balance + wd.amount * U256(10**9)
+            block_env.bal_tracker.track_balance_change(
+                block_env.state, wd.address, old_balance, new_balance
+            )
 
         modify_state(block_env.state, wd.address, increase_recipient_balance)
 

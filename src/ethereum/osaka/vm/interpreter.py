@@ -43,6 +43,11 @@ from ..state import (
     rollback_transaction,
     set_code,
 )
+from ..state_tracking import (
+    increment_nonce_with_tracking,
+    move_ether_with_tracking,
+    set_code_with_tracking,
+)
 from ..vm import Message
 from ..vm.eoa_delegation import set_delegation
 from ..vm.gas import GAS_CODE_DEPOSIT, charge_gas
@@ -180,7 +185,13 @@ def process_create_message(message: Message) -> Evm:
     # accounts.
     mark_account_created(state, message.current_target)
 
-    increment_nonce(state, message.current_target)
+    # EIP-7928: Track nonce for the newly created contract
+    # The deployer's nonce is tracked in generic_create before this call
+    if message.block_env.bal_tracker:
+        increment_nonce_with_tracking(message.block_env, message.current_target)
+    else:
+        increment_nonce(state, message.current_target)
+    
     evm = process_message(message)
     if not evm.error:
         contract_code = evm.output
@@ -198,7 +209,11 @@ def process_create_message(message: Message) -> Evm:
             evm.output = b""
             evm.error = error
         else:
-            set_code(state, message.current_target, contract_code)
+            # EIP-7928: Use tracking for code deployment
+            if message.block_env.bal_tracker:
+                set_code_with_tracking(message.block_env, message.current_target, contract_code)
+            else:
+                set_code(state, message.current_target, contract_code)
             commit_transaction(state, transient_storage)
     else:
         rollback_transaction(state, transient_storage)
@@ -228,9 +243,15 @@ def process_message(message: Message) -> Evm:
     begin_transaction(state, transient_storage)
 
     if message.should_transfer_value and message.value != 0:
-        move_ether(
-            state, message.caller, message.current_target, message.value
-        )
+        # EIP-7928: Use tracking for value transfers
+        if message.block_env.bal_tracker:
+            move_ether_with_tracking(
+                message.block_env, message.caller, message.current_target, message.value
+            )
+        else:
+            move_ether(
+                state, message.caller, message.current_target, message.value
+            )
 
     evm = execute_code(message)
     if evm.error:

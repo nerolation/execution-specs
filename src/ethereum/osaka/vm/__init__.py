@@ -14,7 +14,7 @@ The abstract computer which runs the code stored in an
 """
 
 from dataclasses import dataclass, field
-from typing import List, Optional, Set, Tuple, Union
+from typing import Dict, List, Optional, Set, Tuple, Union
 
 from ethereum_types.bytes import Bytes, Bytes0, Bytes32
 from ethereum_types.numeric import U64, U256, Uint
@@ -22,6 +22,12 @@ from ethereum_types.numeric import U64, U256, Uint
 from ethereum.crypto.hash import Hash32
 from ethereum.exceptions import EthereumException
 
+from ..bal_tracker import BalTracker
+from ..bal_types import (
+    AccountAccess, AccountBalanceDiff, AccountNonce,
+    BalanceChange, BlockAccessList, BalanceDiffs, NonceDiffs,
+    PerTxAccess, SlotAccess, StorageKey, StorageValue, TxIndex
+)
 from ..blocks import Log, Receipt, Withdrawal
 from ..fork_types import Address, Authorization, VersionedHash
 from ..state import State, TransientStorage
@@ -48,6 +54,7 @@ class BlockEnvironment:
     prev_randao: Bytes32
     excess_blob_gas: U64
     parent_beacon_block_root: Hash32
+    bal_tracker: Optional[BalTracker] = None  # EIP-7928: BAL tracker
 
 
 @dataclass
@@ -74,6 +81,16 @@ class BlockOutput:
         Total blob gas used in the block.
     requests : `Bytes`
         Hash of all the requests in the block.
+    accessed_items : `Dict`
+        EIP-7928: Mapping of (address, slot) to list of (tx_index, is_write, value).
+    balance_changes : `Dict`
+        EIP-7928: Mapping of address to list of (tx_index, delta).
+    nonce_changes : `Dict`
+        EIP-7928: Mapping of address to nonce before transaction.
+    code_changes : `Dict`
+        EIP-7928: Mapping of address to deployed code.
+    accessed_addresses : `Set`
+        EIP-7928: Set of accessed addresses in the block.
     """
 
     block_gas_used: Uint = Uint(0)
@@ -90,6 +107,16 @@ class BlockOutput:
     )
     blob_gas_used: U64 = U64(0)
     requests: List[Bytes] = field(default_factory=list)
+    # EIP-7928 fields
+    accessed_items: Dict[Tuple[Address, StorageKey], List[Tuple[TxIndex, bool, StorageValue]]] = field(
+        default_factory=dict
+    )
+    balance_changes: Dict[Address, List[Tuple[TxIndex, Bytes]]] = field(
+        default_factory=dict
+    )
+    nonce_changes: Dict[Address, U64] = field(default_factory=dict)
+    code_changes: Dict[Address, Bytes] = field(default_factory=dict)
+    accessed_addresses: Set[Address] = field(default_factory=set)
 
 
 @dataclass

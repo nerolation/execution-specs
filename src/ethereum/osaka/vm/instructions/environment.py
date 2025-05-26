@@ -18,9 +18,10 @@ from ethereum_types.numeric import U256, Uint, ulen
 from ethereum.crypto.hash import keccak256
 from ethereum.utils.numeric import ceil32
 
-from ...fork_types import EMPTY_ACCOUNT
+from ...fork_types import EMPTY_ACCOUNT, Address, Log
 from ...state import get_account
-from ...utils.address import to_address
+from ...state_tracking import track_account_access_with_bal
+from ...utils.address import to_address, compute_contract_address
 from ...vm.memory import buffer_read, memory_write
 from .. import Evm
 from ..exceptions import OutOfBoundsRead
@@ -86,6 +87,9 @@ def balance(evm: Evm) -> None:
     # OPERATION
     # Non-existent accounts default to EMPTY_ACCOUNT, which has balance 0.
     balance = get_account(evm.message.block_env.state, address).balance
+    
+    # Track account access for BAL
+    track_account_access_with_bal(evm, address)
 
     push(evm.stack, balance)
 
@@ -354,6 +358,10 @@ def extcodesize(evm: Evm) -> None:
     code = get_account(evm.message.block_env.state, address).code
 
     codesize = U256(len(code))
+    
+    # Track account access for BAL
+    track_account_access_with_bal(evm, address)
+    
     push(evm.stack, codesize)
 
     # PROGRAM COUNTER
@@ -397,6 +405,9 @@ def extcodecopy(evm: Evm) -> None:
 
     value = buffer_read(code, code_start_index, size)
     memory_write(evm.memory, memory_start_index, value)
+    
+    # Track account access for BAL
+    track_account_access_with_bal(evm, address)
 
     # PROGRAM COUNTER
     evm.pc += Uint(1)
@@ -460,7 +471,7 @@ def returndatacopy(evm: Evm) -> None:
 
 def extcodehash(evm: Evm) -> None:
     """
-    Returns the keccak256 hash of a contract’s bytecode
+    Returns the keccak256 hash of a contract's bytecode
     Parameters
     ----------
     evm :
@@ -486,6 +497,9 @@ def extcodehash(evm: Evm) -> None:
     else:
         code = account.code
         codehash = U256.from_be_bytes(keccak256(code))
+        
+    # Track account access for BAL
+    track_account_access_with_bal(evm, address)
 
     push(evm.stack, codehash)
 

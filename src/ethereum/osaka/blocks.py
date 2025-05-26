@@ -17,6 +17,7 @@ from ethereum_types.frozen import slotted_freezable
 from ethereum_types.numeric import U64, U256, Uint
 
 from ..crypto.hash import Hash32
+from .bal_types import BlockAccessList, BalanceDiffs, NonceDiffs
 from .fork_types import Address, Bloom, Root
 from .transactions import (
     AccessListTransaction,
@@ -69,6 +70,9 @@ class Header:
     excess_blob_gas: U64
     parent_beacon_block_root: Root
     requests_hash: Hash32
+    bal_root: Root  # Root hash of the block access list
+    balance_diffs_root: Root  # Root hash of the balance diffs
+    nonce_diffs_root: Root  # Root hash of the nonce diffs
 
 
 @slotted_freezable
@@ -82,6 +86,9 @@ class Block:
     transactions: Tuple[Union[Bytes, LegacyTransaction], ...]
     ommers: Tuple[Header, ...]
     withdrawals: Tuple[Withdrawal, ...]
+    block_access_list: BlockAccessList  # EIP-7928: Block-level access list
+    balance_diffs: BalanceDiffs  # EIP-7928: Balance diffs
+    nonce_diffs: NonceDiffs  # EIP-7928: Nonce diffs
 
 
 @slotted_freezable

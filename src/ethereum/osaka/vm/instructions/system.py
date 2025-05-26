@@ -12,20 +12,30 @@ Introduction
 Implementations of the EVM system related instructions.
 """
 
-from ethereum_types.bytes import Bytes, Bytes0
+from ethereum_types.bytes import Bytes32
 from ethereum_types.numeric import U256, Uint
 
 from ethereum.utils.numeric import ceil32
 
 from ...fork_types import Address
 from ...state import (
+    State,
+    account_exists,
     account_has_code_or_nonce,
     account_has_storage,
     get_account,
     increment_nonce,
     is_account_alive,
+    is_account_empty,
     move_ether,
     set_account_balance,
+    set_code,
+)
+from ...state_tracking import (
+    increment_nonce_with_tracking,
+    move_ether_with_tracking,
+    set_code_with_tracking,
+    track_account_access_with_bal,
 )
 from ...utils.address import (
     compute_contract_address,
@@ -70,8 +80,6 @@ def generic_create(
     """
     Core logic used by the `CREATE*` family of opcodes.
     """
-    # This import causes a circular import error
-    # if it's not moved inside this method
     from ...vm.interpreter import (
         MAX_CODE_SIZE,
         STACK_DEPTH_LIMIT,
@@ -107,13 +115,15 @@ def generic_create(
     if account_has_code_or_nonce(
         evm.message.block_env.state, contract_address
     ) or account_has_storage(evm.message.block_env.state, contract_address):
-        increment_nonce(
-            evm.message.block_env.state, evm.message.current_target
+        # EIP-7928: Track nonce for CREATE/CREATE2 deployer
+        increment_nonce_with_tracking(
+            evm.message.block_env, evm.message.current_target
         )
         push(evm.stack, U256(0))
         return
 
-    increment_nonce(evm.message.block_env.state, evm.message.current_target)
+    # EIP-7928: Track nonce for CREATE/CREATE2 deployer
+    increment_nonce_with_tracking(evm.message.block_env, evm.message.current_target)
 
     child_message = Message(
         block_env=evm.message.block_env,
@@ -375,6 +385,9 @@ def call(evm: Evm) -> None:
     else:
         evm.accessed_addresses.add(to)
         access_gas_cost = GAS_COLD_ACCOUNT_ACCESS
+    
+    # Track account access for BAL
+    track_account_access_with_bal(evm, to)
 
     code_address = to
     (
@@ -433,7 +446,7 @@ def call(evm: Evm) -> None:
 
 def callcode(evm: Evm) -> None:
     """
-    Message-call into this account with alternative account’s code.
+    Message-call into this account with alternative account's code.
 
     Parameters
     ----------
@@ -465,6 +478,9 @@ def callcode(evm: Evm) -> None:
     else:
         evm.accessed_addresses.add(code_address)
         access_gas_cost = GAS_COLD_ACCOUNT_ACCESS
+    
+    # Track account access for BAL
+    track_account_access_with_bal(evm, code_address)
 
     (
         disable_precompiles,
@@ -532,6 +548,9 @@ def selfdestruct(evm: Evm) -> None:
     if beneficiary not in evm.accessed_addresses:
         evm.accessed_addresses.add(beneficiary)
         gas_cost += GAS_COLD_ACCOUNT_ACCESS
+    
+    # Track account access for BAL
+    track_account_access_with_bal(evm, beneficiary)
 
     if (
         not is_account_alive(evm.message.block_env.state, beneficiary)
@@ -551,8 +570,9 @@ def selfdestruct(evm: Evm) -> None:
         evm.message.block_env.state, originator
     ).balance
 
-    move_ether(
-        evm.message.block_env.state,
+    # EIP-7928: Use tracking for move_ether
+    move_ether_with_tracking(
+        evm.message.block_env,
         originator,
         beneficiary,
         originator_balance,
@@ -604,6 +624,9 @@ def delegatecall(evm: Evm) -> None:
     else:
         evm.accessed_addresses.add(code_address)
         access_gas_cost = GAS_COLD_ACCOUNT_ACCESS
+    
+    # Track account access for BAL
+    track_account_access_with_bal(evm, code_address)
 
     (
         disable_precompiles,
@@ -672,6 +695,9 @@ def staticcall(evm: Evm) -> None:
     else:
         evm.accessed_addresses.add(to)
         access_gas_cost = GAS_COLD_ACCOUNT_ACCESS
+    
+    # Track account access for BAL
+    track_account_access_with_bal(evm, to)
 
     code_address = to
     (

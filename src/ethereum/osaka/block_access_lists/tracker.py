@@ -82,6 +82,24 @@ def set_transaction_index(tracker: StateChangeTracker, tx_index: int) -> None:
     tracker.current_tx_index = tx_index
 
 
+def set_system_transaction_index(tracker: StateChangeTracker, tx_index: int) -> None:
+    """
+    Set the transaction index for system transactions.
+    
+    System transactions (like beacon root and history storage updates) are
+    tracked separately with a special index that comes after all regular
+    transactions.
+    
+    Parameters
+    ----------
+    tracker :
+        The state change tracker instance.
+    tx_index :
+        The system transaction index (typically len(transactions) + 1).
+    """
+    tracker.current_tx_index = tx_index
+
+
 def capture_pre_state(
     tracker: StateChangeTracker,
     address: Address,

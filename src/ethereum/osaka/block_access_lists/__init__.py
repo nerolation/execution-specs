@@ -15,6 +15,7 @@ from .builder import (
 from .tracker import (
     StateChangeTracker,
     set_transaction_index,
+    set_system_transaction_index,
     track_address_access,
     track_balance_change,
     track_code_change,
@@ -40,6 +41,7 @@ __all__ = [
     "build",
     "compute_bal_hash",
     "set_transaction_index",
+    "set_system_transaction_index",
     "ssz_encode_block_access_list",
     "track_address_access",
     "track_balance_change",

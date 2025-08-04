@@ -53,6 +53,7 @@ class BlockEnvironment:
     prev_randao: Bytes32
     excess_blob_gas: U64
     parent_beacon_block_root: Hash32
+    warming_deltas: dict = field(default_factory=dict)
 
 
 @dataclass

@@ -13,7 +13,7 @@ Entry point for the Ethereum specification.
 """
 
 from dataclasses import dataclass
-from typing import List, Optional, Tuple
+from typing import Dict, List, Optional, Set, Tuple
 
 from ethereum_rlp import rlp
 from ethereum_types.bytes import Bytes
@@ -31,6 +31,7 @@ from ethereum.exceptions import (
 
 from . import vm
 from .block_access_lists import StateChangeTracker, compute_bal_hash, build, set_system_transaction_index, track_balance_change
+from .block_warming import build_warming_cost_tracker, calculate_warming_costs, calculate_transaction_warming_deltas
 from .blocks import Block, Header, Log, Receipt, Withdrawal, encode_receipt
 from .bloom import logs_bloom
 from .exceptions import (
@@ -219,6 +220,11 @@ def state_transition(chain: BlockChain, block: Block) -> None:
     if block.ommers != ():
         raise InvalidBlock
 
+    # Calculate warming cost distribution from block access list
+    warming_tracker = build_warming_cost_tracker(block.block_access_list, len(block.transactions))
+    warming_costs = calculate_warming_costs(warming_tracker)
+    tx_warming_deltas = calculate_transaction_warming_deltas(warming_tracker, warming_costs)
+
     block_env = vm.BlockEnvironment(
         chain_id=chain.chain_id,
         state=chain.state,
@@ -231,6 +237,7 @@ def state_transition(chain: BlockChain, block: Block) -> None:
         prev_randao=block.header.prev_randao,
         excess_blob_gas=block.header.excess_blob_gas,
         parent_beacon_block_root=block.header.parent_beacon_block_root,
+        warming_deltas=tx_warming_deltas,
     )
 
     block_output = apply_body(
@@ -793,7 +800,9 @@ def apply_body(
 
     for i, tx in enumerate(map(decode_transaction, transactions)):
         change_tracker.set_transaction_index(i)
-        process_transaction(block_env, block_output, tx, Uint(i), change_tracker)
+        # Get warming delta for this transaction
+        warming_delta = block_env.warming_deltas.get(i, Uint(0)) if block_env.warming_deltas else Uint(0)
+        process_transaction(block_env, block_output, tx, Uint(i), change_tracker, warming_delta)
 
     process_withdrawals(block_env, block_output, withdrawals, change_tracker)
 
@@ -862,6 +871,7 @@ def process_transaction(
     tx: Transaction,
     index: Uint,
     change_tracker: StateChangeTracker,
+    warming_delta: Uint = Uint(0),
 ) -> None:
     """
     Execute a transaction against the provided environment.
@@ -885,6 +895,8 @@ def process_transaction(
         Transaction to execute.
     index:
         Index of the transaction in the block.
+    warming_delta :
+        Additional gas cost to charge for warming storage slots.
     """
     trie_set(
         block_output.transactions_trie,
@@ -917,8 +929,10 @@ def process_transaction(
     gas = tx.gas - intrinsic_gas
     increment_nonce(block_env.state, sender, change_tracker)
 
+    # Apply warming delta to sender's balance along with gas fees
+    total_deduction = effective_gas_fee + blob_gas_fee + warming_delta
     sender_balance_after_gas_fee = (
-        Uint(sender_account.balance) - effective_gas_fee - blob_gas_fee
+        Uint(sender_account.balance) - total_deduction
     )
     set_account_balance(
         block_env.state, sender, U256(sender_balance_after_gas_fee), change_tracker

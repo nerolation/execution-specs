@@ -29,7 +29,7 @@ from ethereum.exceptions import (
     NonceMismatchError,
 )
 
-from . import vm
+from . import FORK_CRITERIA, vm
 from .blocks import Block, Header, Log, Receipt, Withdrawal, encode_receipt
 from .bloom import logs_bloom
 from .exceptions import (
@@ -90,15 +90,15 @@ from .vm.interpreter import MessageCallOutput, process_message_call
 
 BASE_FEE_MAX_CHANGE_DENOMINATOR = Uint(16)  # Doubled for 6-second slots (was 8)
 ELASTICITY_MULTIPLIER = Uint(2)
-GAS_LIMIT_ADJUSTMENT_FACTOR = Uint(1024)
-GAS_LIMIT_MINIMUM = Uint(5000)
+GAS_LIMIT_ADJUSTMENT_FACTOR = Uint(2048) # Doubled for 6-second slots (was 1024)
+GAS_LIMIT_MINIMUM = Uint(2500) # Halved for 6-second slots (was 5000)
 EMPTY_OMMER_HASH = keccak256(rlp.encode([]))
 SYSTEM_ADDRESS = hex_to_address("0xfffffffffffffffffffffffffffffffffffffffe")
 BEACON_ROOTS_ADDRESS = hex_to_address(
     "0x000F3df6D732807Ef1319fB7B8bB8522d0Beac02"
 )
 SYSTEM_TRANSACTION_GAS = Uint(15000000)  # Halved for 6-second slots (was 30000000)
-MAX_BLOB_GAS_PER_BLOCK = U64(589824)  # Halved for 6-second slots (was 1179648)
+MAX_BLOB_GAS_PER_BLOCK = U64(524288)  # Reduced for 6-second slots (was 1179648)
 VERSIONED_HASH_VERSION_KZG = b"\x01"
 
 WITHDRAWAL_REQUEST_PREDEPLOY_ADDRESS = hex_to_address(
@@ -110,10 +110,10 @@ CONSOLIDATION_REQUEST_PREDEPLOY_ADDRESS = hex_to_address(
 HISTORY_STORAGE_ADDRESS = hex_to_address(
     "0x0000F90827F1C53a10cb7A02335B175320002935"
 )
-MAX_BLOCK_SIZE = 10_485_760
-SAFETY_MARGIN = 2_097_152
+MAX_BLOCK_SIZE = 5_242_880 # Halved for 6-second slots (was 10_485_760)
+SAFETY_MARGIN = 1_048_576 # Halved for 6-second slots (was 2_097_152)
 MAX_RLP_BLOCK_SIZE = MAX_BLOCK_SIZE - SAFETY_MARGIN
-BLOB_COUNT_LIMIT = 6
+BLOB_COUNT_LIMIT = 3 # Halved for 6-second slots (was 6)
 
 
 @dataclass
@@ -272,9 +272,7 @@ def state_transition(chain: BlockChain, block: Block) -> None:
 
 def calculate_base_fee_per_gas(
     block_gas_limit: Uint,
-    parent_gas_limit: Uint,
-    parent_gas_used: Uint,
-    parent_base_fee_per_gas: Uint,
+    parent_header: Header,
 ) -> Uint:
     """
     Calculates the base fee per gas for the block.
@@ -283,18 +281,23 @@ def calculate_base_fee_per_gas(
     ----------
     block_gas_limit :
         Gas limit of the block for which the base fee is being calculated.
-    parent_gas_limit :
-        Gas limit of the parent block.
-    parent_gas_used :
-        Gas used in the parent block.
-    parent_base_fee_per_gas :
-        Base fee per gas of the parent block.
+    parent_header :
+        The parent block of the current block.
 
     Returns
     -------
     base_fee_per_gas : `Uint`
         Base fee per gas for the block.
     """
+    parent_gas_limit = parent_header.gas_limit
+    parent_gas_used = parent_header.gas_used
+    parent_base_fee_per_gas = parent_header.base_fee_per_gas
+
+    # If this is a fork block, use half of parent's gas limit and gas used (EIP-7782)
+    if not FORK_CRITERIA.check(parent_header.number, parent_header.timestamp):
+        parent_gas_limit /= 2
+        parent_gas_used /= 2
+
     parent_gas_target = parent_gas_limit // ELASTICITY_MULTIPLIER
     if not check_gas_limit(block_gas_limit, parent_gas_limit):
         raise InvalidBlock
@@ -362,12 +365,7 @@ def validate_header(chain: BlockChain, header: Header) -> None:
     if header.gas_used > header.gas_limit:
         raise InvalidBlock
 
-    expected_base_fee_per_gas = calculate_base_fee_per_gas(
-        header.gas_limit,
-        parent_header.gas_limit,
-        parent_header.gas_used,
-        parent_header.base_fee_per_gas,
-    )
+    expected_base_fee_per_gas = calculate_base_fee_per_gas(header.gas_limit, parent_header)
     if expected_base_fee_per_gas != header.base_fee_per_gas:
         raise InvalidBlock
     if header.timestamp <= parent_header.timestamp:

@@ -60,11 +60,11 @@ def sload(evm: Evm) -> None:
         evm.message.block_env.state, evm.message.current_target, key
     )
 
-    if evm.message.change_tracker:
+    if evm.message.block_env.state_tracer:
         from ...block_access_lists.tracker import track_storage_read
 
         track_storage_read(
-            evm.message.change_tracker,
+            evm.message.block_env.state_tracer,
             evm.message.current_target,
             key,
             evm.message.block_env.state,
@@ -139,11 +139,11 @@ def sstore(evm: Evm) -> None:
 
     # Track storage write BEFORE modifying state
     # so we capture the correct pre-value
-    if evm.message.change_tracker:
+    if evm.message.block_env.state_tracer:
         from ...block_access_lists.tracker import track_storage_write
 
         track_storage_write(
-            evm.message.change_tracker,
+            evm.message.block_env.state_tracer,
             evm.message.current_target,
             key,
             new_value,

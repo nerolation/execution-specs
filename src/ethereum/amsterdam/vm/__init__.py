@@ -50,6 +50,7 @@ class BlockEnvironment:
     prev_randao: Bytes32
     excess_blob_gas: U64
     parent_beacon_block_root: Hash32
+    state_tracer: Optional["StateChangeTracker"] = None
 
 
 @dataclass
@@ -138,7 +139,6 @@ class Message:
     accessed_storage_keys: Set[Tuple[Address, Bytes32]]
     disable_precompiles: bool
     parent_evm: Optional["Evm"]
-    change_tracker: Optional["StateChangeTracker"] = None
 
 
 @dataclass

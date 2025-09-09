@@ -110,7 +110,7 @@ def generic_create(
         increment_nonce(
             evm.message.block_env.state,
             evm.message.current_target,
-            evm.message.change_tracker,
+            evm.message.block_env.state_tracer,
         )
         push(evm.stack, U256(0))
         return
@@ -118,7 +118,7 @@ def generic_create(
     increment_nonce(
         evm.message.block_env.state,
         evm.message.current_target,
-        evm.message.change_tracker,
+        evm.message.block_env.state_tracer,
     )
 
     child_message = Message(
@@ -139,13 +139,12 @@ def generic_create(
         accessed_storage_keys=evm.accessed_storage_keys.copy(),
         disable_precompiles=False,
         parent_evm=evm,
-        change_tracker=evm.message.change_tracker,
     )
 
-    if evm.message.change_tracker:
+    if evm.message.block_env.state_tracer:
         from ...block_access_lists.tracker import track_address_access
 
-        track_address_access(evm.message.change_tracker, contract_address)
+        track_address_access(evm.message.block_env.state_tracer, contract_address)
 
     child_evm = process_create_message(child_message)
 
@@ -336,13 +335,12 @@ def generic_call(
         accessed_storage_keys=evm.accessed_storage_keys.copy(),
         disable_precompiles=disable_precompiles,
         parent_evm=evm,
-        change_tracker=evm.message.change_tracker,
     )
 
-    if evm.message.change_tracker:
+    if evm.message.block_env.state_tracer:
         from ...block_access_lists.tracker import track_address_access
 
-        track_address_access(evm.message.change_tracker, to)
+        track_address_access(evm.message.block_env.state_tracer, to)
 
     child_evm = process_message(child_message)
 
@@ -574,7 +572,7 @@ def selfdestruct(evm: Evm) -> None:
         originator,
         beneficiary,
         originator_balance,
-        evm.message.change_tracker,
+        evm.message.block_env.state_tracer,
     )
 
     # register account for deletion only if it was created
@@ -586,7 +584,7 @@ def selfdestruct(evm: Evm) -> None:
             evm.message.block_env.state,
             originator,
             U256(0),
-            evm.message.change_tracker,
+            evm.message.block_env.state_tracer,
         )
         evm.accounts_to_delete.add(originator)
 

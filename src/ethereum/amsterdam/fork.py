@@ -596,7 +596,6 @@ def process_system_transaction(
     target_address: Address,
     system_contract_code: Bytes,
     data: Bytes,
-    change_tracker: Optional[StateChangeTracker] = None,
 ) -> MessageCallOutput:
     """
     Process a system transaction with the given code.
@@ -615,8 +614,6 @@ def process_system_transaction(
         Code of the contract to call.
     data :
         Data to pass to the contract.
-    change_tracker :
-        The state change tracker instance.
 
     Returns
     -------
@@ -654,7 +651,6 @@ def process_system_transaction(
         accessed_storage_keys=set(),
         disable_precompiles=False,
         parent_evm=None,
-        change_tracker=change_tracker,
     )
 
     system_tx_output = process_message_call(system_tx_message)
@@ -666,7 +662,6 @@ def process_checked_system_transaction(
     block_env: vm.BlockEnvironment,
     target_address: Address,
     data: Bytes,
-    change_tracker: Optional[StateChangeTracker] = None,
 ) -> MessageCallOutput:
     """
     Process a system transaction and raise an error if the contract does not
@@ -680,8 +675,6 @@ def process_checked_system_transaction(
         Address of the contract to call.
     data :
         Data to pass to the contract.
-    change_tracker :
-        The state change tracker instance.
 
     Returns
     -------
@@ -701,7 +694,6 @@ def process_checked_system_transaction(
         target_address,
         system_contract_code,
         data,
-        change_tracker,
     )
 
     if system_tx_output.error:
@@ -717,7 +709,6 @@ def process_unchecked_system_transaction(
     block_env: vm.BlockEnvironment,
     target_address: Address,
     data: Bytes,
-    change_tracker: Optional[StateChangeTracker] = None,
 ) -> MessageCallOutput:
     """
     Process a system transaction without checking if the contract contains code
@@ -731,8 +722,6 @@ def process_unchecked_system_transaction(
         Address of the contract to call.
     data :
         Data to pass to the contract.
-    change_tracker :
-        The state change tracker instance.
 
     Returns
     -------
@@ -745,7 +734,6 @@ def process_unchecked_system_transaction(
         target_address,
         system_contract_code,
         data,
-        change_tracker,
     )
 
 
@@ -781,43 +769,40 @@ def apply_body(
     block_output = vm.BlockOutput()
 
     # Initialize Block Access List state change tracker
-    change_tracker = StateChangeTracker(block_output.block_access_list_builder)
+    block_env.state_tracer = StateChangeTracker(block_output.block_access_list_builder)
 
     # Set system transaction index for pre-execution system contracts
     # EIP-7928: System contracts use block_access_index 0
-    set_transaction_index(change_tracker, 0)
+    set_transaction_index(block_env.state_tracer, 0)
 
     process_unchecked_system_transaction(
         block_env=block_env,
         target_address=BEACON_ROOTS_ADDRESS,
         data=block_env.parent_beacon_block_root,
-        change_tracker=change_tracker,
     )
 
     process_unchecked_system_transaction(
         block_env=block_env,
         target_address=HISTORY_STORAGE_ADDRESS,
         data=block_env.block_hashes[-1],  # The parent hash
-        change_tracker=change_tracker,
     )
 
     # EIP-7928: Transactions use block_access_index 1 to len(transactions)
     for i, tx in enumerate(map(decode_transaction, transactions)):
-        set_transaction_index(change_tracker, i + 1)
+        set_transaction_index(block_env.state_tracer, i + 1)
         process_transaction(
-            block_env, block_output, tx, Uint(i), change_tracker
+            block_env, block_output, tx, Uint(i)
         )
 
     # EIP-7928: Post-execution uses block_access_index len(transactions) + 1
     post_execution_index = len(transactions) + 1
-    set_transaction_index(change_tracker, post_execution_index)
+    set_transaction_index(block_env.state_tracer, post_execution_index)
 
-    process_withdrawals(block_env, block_output, withdrawals, change_tracker)
+    process_withdrawals(block_env, block_output, withdrawals)
 
     process_general_purpose_requests(
         block_env=block_env,
         block_output=block_output,
-        change_tracker=change_tracker,
     )
 
     return block_output
@@ -826,7 +811,6 @@ def apply_body(
 def process_general_purpose_requests(
     block_env: vm.BlockEnvironment,
     block_output: vm.BlockOutput,
-    change_tracker: StateChangeTracker,
 ) -> None:
     """
     Process all the requests in the block.
@@ -837,8 +821,6 @@ def process_general_purpose_requests(
         The execution environment for the Block.
     block_output :
         The block output for the current block.
-    change_tracker :
-        The state change tracker instance.
     """
     # Requests are to be in ascending order of request type
     deposit_requests = parse_deposit_requests(block_output)
@@ -850,7 +832,6 @@ def process_general_purpose_requests(
         block_env=block_env,
         target_address=WITHDRAWAL_REQUEST_PREDEPLOY_ADDRESS,
         data=b"",
-        change_tracker=change_tracker,
     )
 
     if len(system_withdrawal_tx_output.return_data) > 0:
@@ -862,7 +843,6 @@ def process_general_purpose_requests(
         block_env=block_env,
         target_address=CONSOLIDATION_REQUEST_PREDEPLOY_ADDRESS,
         data=b"",
-        change_tracker=change_tracker,
     )
 
     if len(system_consolidation_tx_output.return_data) > 0:
@@ -877,7 +857,6 @@ def process_transaction(
     block_output: vm.BlockOutput,
     tx: Transaction,
     index: Uint,
-    change_tracker: StateChangeTracker,
 ) -> None:
     """
     Execute a transaction against the provided environment.
@@ -901,8 +880,6 @@ def process_transaction(
         Transaction to execute.
     index:
         Index of the transaction in the block.
-    change_tracker :
-        The state change tracker instance.
     """
     trie_set(
         block_output.transactions_trie,
@@ -933,7 +910,7 @@ def process_transaction(
     effective_gas_fee = tx.gas * effective_gas_price
 
     gas = tx.gas - intrinsic_gas
-    increment_nonce(block_env.state, sender, change_tracker)
+    increment_nonce(block_env.state, sender, block_env.state_tracer)
 
     sender_balance_after_gas_fee = (
         Uint(sender_account.balance) - effective_gas_fee - blob_gas_fee
@@ -942,7 +919,7 @@ def process_transaction(
         block_env.state,
         sender,
         U256(sender_balance_after_gas_fee),
-        change_tracker,
+        block_env.state_tracer,
     )
 
     access_list_addresses = set()
@@ -980,7 +957,6 @@ def process_transaction(
     )
 
     message = prepare_message(block_env, tx_env, tx)
-    message.change_tracker = change_tracker
 
     tx_output = process_message_call(message)
 
@@ -1074,7 +1050,7 @@ def process_withdrawals(
         # Track balance change for Block Access List
         # (withdrawals are tracked as system contract changes)
         new_balance = get_account(block_env.state, wd.address).balance
-        track_balance_change(change_tracker, wd.address, U256(new_balance))
+        track_balance_change(block_env.state_tracer, wd.address, U256(new_balance))
 
         if account_exists_and_is_empty(block_env.state, wd.address):
             destroy_account(block_env.state, wd.address)

@@ -87,10 +87,10 @@ def balance(evm: Evm) -> None:
     # Non-existent accounts default to EMPTY_ACCOUNT, which has balance 0.
     balance = get_account(evm.message.block_env.state, address).balance
 
-    if evm.message.change_tracker:
+    if evm.message.block_env.state_tracer:
         from ...block_access_lists.tracker import track_address_access
 
-        track_address_access(evm.message.change_tracker, address)
+        track_address_access(evm.message.block_env.state_tracer, address)
 
     push(evm.stack, balance)
 
@@ -358,10 +358,10 @@ def extcodesize(evm: Evm) -> None:
     # OPERATION
     code = get_account(evm.message.block_env.state, address).code
 
-    if evm.message.change_tracker:
+    if evm.message.block_env.state_tracer:
         from ...block_access_lists.tracker import track_address_access
 
-        track_address_access(evm.message.change_tracker, address)
+        track_address_access(evm.message.block_env.state_tracer, address)
 
     codesize = U256(len(code))
     push(evm.stack, codesize)
@@ -405,10 +405,10 @@ def extcodecopy(evm: Evm) -> None:
     evm.memory += b"\x00" * extend_memory.expand_by
     code = get_account(evm.message.block_env.state, address).code
 
-    if evm.message.change_tracker:
+    if evm.message.block_env.state_tracer:
         from ...block_access_lists.tracker import track_address_access
 
-        track_address_access(evm.message.change_tracker, address)
+        track_address_access(evm.message.block_env.state_tracer, address)
 
     value = buffer_read(code, code_start_index, size)
     memory_write(evm.memory, memory_start_index, value)
@@ -496,10 +496,10 @@ def extcodehash(evm: Evm) -> None:
     # OPERATION
     account = get_account(evm.message.block_env.state, address)
 
-    if evm.message.change_tracker:
+    if evm.message.block_env.state_tracer:
         from ...block_access_lists.tracker import track_address_access
 
-        track_address_access(evm.message.change_tracker, address)
+        track_address_access(evm.message.block_env.state_tracer, address)
 
     if account == EMPTY_ACCOUNT:
         codehash = U256(0)

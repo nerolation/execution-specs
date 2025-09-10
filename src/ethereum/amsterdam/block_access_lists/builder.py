@@ -441,9 +441,21 @@ def build_block_access_list(
             )
 
         storage_reads = []
-        for slot, indices in changes.storage_reads.items():
-            if slot not in changes.storage_changes:
-                sorted_indices = tuple(sorted(indices))
+        for slot, read_indices in changes.storage_reads.items():
+            # Get tx indices where this slot was written (if any)
+            write_indices = set()
+            if slot in changes.storage_changes:
+                for change in changes.storage_changes[slot]:
+                    write_indices.add(change.block_access_index)
+            
+            # Only include read indices that don't have a corresponding write
+            filtered_read_indices = [
+                idx for idx in read_indices 
+                if idx not in write_indices
+            ]
+            
+            if filtered_read_indices:
+                sorted_indices = tuple(sorted(filtered_read_indices))
                 storage_reads.append(
                     SlotReads(slot=slot, block_access_indices=sorted_indices)
                 )

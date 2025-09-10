@@ -18,7 +18,7 @@ from ethereum_types.numeric import U256, Uint, ulen
 from ethereum.crypto.hash import keccak256
 from ethereum.utils.numeric import ceil32
 
-from ...block_access_lists.tracker import track_address_access
+from ...block_access_lists.tracker import track_account_read, track_address_access
 from ...fork_types import EMPTY_ACCOUNT
 from ...state import get_account
 from ...utils.address import to_address_masked
@@ -89,6 +89,7 @@ def balance(evm: Evm) -> None:
     state = evm.message.block_env.state
     balance = get_account(state, address).balance
     track_address_access(state.change_tracker, address)
+    track_account_read(state.change_tracker, address)
 
     push(evm.stack, balance)
 
@@ -357,6 +358,7 @@ def extcodesize(evm: Evm) -> None:
     state = evm.message.block_env.state
     code = get_account(state, address).code
     track_address_access(state.change_tracker, address)
+    track_account_read(state.change_tracker, address)
 
     codesize = U256(len(code))
     push(evm.stack, codesize)
@@ -401,6 +403,7 @@ def extcodecopy(evm: Evm) -> None:
     state = evm.message.block_env.state
     code = get_account(state, address).code
     track_address_access(state.change_tracker, address)
+    track_account_read(state.change_tracker, address)
 
     value = buffer_read(code, code_start_index, size)
     memory_write(evm.memory, memory_start_index, value)
@@ -489,6 +492,7 @@ def extcodehash(evm: Evm) -> None:
     state = evm.message.block_env.state
     account = get_account(state, address)
     track_address_access(state.change_tracker, address)
+    track_account_read(state.change_tracker, address)
 
     if account == EMPTY_ACCOUNT:
         codehash = U256(0)

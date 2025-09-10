@@ -96,29 +96,60 @@ class SlotChanges:
 
 @slotted_freezable
 @dataclass
+class SlotReads:
+    """
+    Storage slot reads: [slot, [block_access_indices]]
+    RLP encoded as a list
+    Only includes slots that were read but not written to
+    """
+
+    slot: StorageKey
+    block_access_indices: Tuple[BlockAccessIndex, ...]
+
+
+@slotted_freezable
+@dataclass
+class AccountRead:
+    """
+    Account read-only access: [block_access_index]
+    Used for BALANCE, EXTCODEHASH, etc. operations
+    Only includes tx indices where account was accessed but not modified
+    """
+
+    block_access_index: BlockAccessIndex
+
+
+@slotted_freezable
+@dataclass
 class AccountChanges:
     """
-    All changes for a single account, grouped by field type.
+    All changes and reads for a single account, grouped by field type.
+    This eliminates address redundancy across different change types.
+    Now includes tx indices for all read operations.
     RLP encoded as: [address, storage_changes, storage_reads,
-    balance_changes, nonce_changes, code_changes]
+    balance_changes, nonce_changes, code_changes, account_reads]
     """
 
     address: Address
 
-    # slot -> [block_access_index -> new_value]
+    # Storage changes (slot -> [block_access_index -> new_value])
     storage_changes: Tuple[SlotChanges, ...]
 
-    # read-only storage keys
-    storage_reads: Tuple[StorageKey, ...]
+    # Storage reads (slot -> [block_access_index]) - only for slots not written to
+    storage_reads: Tuple[SlotReads, ...]
 
-    # [block_access_index -> post_balance]
+    # Balance changes ([block_access_index -> post_balance])
     balance_changes: Tuple[BalanceChange, ...]
 
-    # [block_access_index -> new_nonce]
+    # Nonce changes ([block_access_index -> new_nonce])
     nonce_changes: Tuple[NonceChange, ...]
 
-    # [block_access_index -> new_code]
+    # Code changes ([block_access_index -> new_code]) - typically 0 or 1
     code_changes: Tuple[CodeChange, ...]
+
+    # Account read-only accesses ([block_access_index]) - for BALANCE, EXTCODEHASH, etc.
+    # Only includes tx indices where account was accessed but not modified
+    account_reads: Tuple[AccountRead, ...]
 
 
 @slotted_freezable

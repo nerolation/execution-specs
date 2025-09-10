@@ -25,6 +25,7 @@ from ..fork_types import Address
 from ..rlp_types import BlockAccessIndex
 from .builder import (
     BlockAccessListBuilder,
+    add_account_read,
     add_balance_change,
     add_code_change,
     add_nonce_change,
@@ -150,6 +151,43 @@ def track_address_access(
     add_touched_account(tracker.block_access_list_builder, address)
 
 
+def track_account_read(
+    tracker: StateChangeTracker, address: Address
+) -> None:
+    """
+    Track a read-only account access with transaction index.
+
+    Records that an account was accessed during execution without any state
+    changes, tracking the specific transaction index where the access occurred.
+    This is used for operations like [`BALANCE`], [`EXTCODEHASH`],
+    [`EXTCODESIZE`], [`EXTCODECOPY`], and [`STATICCALL`].
+
+    Parameters
+    ----------
+    tracker :
+        The state change tracker instance.
+    address :
+        The account address that was accessed.
+
+    [`BALANCE`] :
+        ref:ethereum.amsterdam.vm.instructions.environment.balance
+    [`EXTCODEHASH`] :
+        ref:ethereum.amsterdam.vm.instructions.environment.extcodehash
+    [`EXTCODESIZE`] :
+        ref:ethereum.amsterdam.vm.instructions.environment.extcodesize
+    [`EXTCODECOPY`] :
+        ref:ethereum.amsterdam.vm.instructions.environment.extcodecopy
+    [`STATICCALL`] :
+        ref:ethereum.amsterdam.vm.instructions.system.staticcall
+    """
+    track_address_access(tracker, address)
+    add_account_read(
+        tracker.block_access_list_builder,
+        address,
+        BlockAccessIndex(tracker.current_block_access_index),
+    )
+
+
 def track_storage_read(
     tracker: StateChangeTracker, address: Address, key: Bytes32, state: "State"
 ) -> None:
@@ -158,7 +196,8 @@ def track_storage_read(
 
     Records that a storage slot was read and captures its pre-state value.
     The slot will only appear in the final access list if it wasn't also
-    written to during block execution.
+    written to during block execution. Includes the transaction index where
+    the read occurred.
 
     Parameters
     ----------
@@ -175,7 +214,12 @@ def track_storage_read(
 
     capture_pre_state(tracker, address, key, state)
 
-    add_storage_read(tracker.block_access_list_builder, address, key)
+    add_storage_read(
+        tracker.block_access_list_builder,
+        address,
+        key,
+        BlockAccessIndex(tracker.current_block_access_index),
+    )
 
 
 def track_storage_write(
@@ -222,7 +266,12 @@ def track_storage_write(
             value_bytes,
         )
     else:
-        add_storage_read(tracker.block_access_list_builder, address, key)
+        add_storage_read(
+            tracker.block_access_list_builder,
+            address,
+            key,
+            BlockAccessIndex(tracker.current_block_access_index),
+        )
 
 
 def track_balance_change(

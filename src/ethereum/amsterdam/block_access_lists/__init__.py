@@ -4,6 +4,7 @@ Block Access Lists (EIP-7928) implementation for Ethereum Amsterdam fork.
 
 from .builder import (
     BlockAccessListBuilder,
+    add_account_read,
     add_balance_change,
     add_code_change,
     add_nonce_change,
@@ -20,6 +21,7 @@ from .rlp_utils import (
 from .tracker import (
     StateChangeTracker,
     set_transaction_index,
+    track_account_read,
     track_address_access,
     track_balance_change,
     track_code_change,
@@ -31,6 +33,7 @@ from .tracker import (
 __all__ = [
     "BlockAccessListBuilder",
     "StateChangeTracker",
+    "add_account_read",
     "add_balance_change",
     "add_code_change",
     "add_nonce_change",
@@ -41,6 +44,7 @@ __all__ = [
     "compute_block_access_list_hash",
     "set_transaction_index",
     "rlp_encode_block_access_list",
+    "track_account_read",
     "track_address_access",
     "track_balance_change",
     "track_code_change",

@@ -25,12 +25,14 @@ from ethereum_types.numeric import U64, U256
 from ..fork_types import Address
 from ..rlp_types import (
     AccountChanges,
+    AccountRead,
     BalanceChange,
     BlockAccessIndex,
     BlockAccessList,
     CodeChange,
     NonceChange,
     SlotChanges,
+    SlotReads,
     StorageChange,
 )
 
@@ -53,9 +55,10 @@ class AccountData:
     Each change includes the transaction index and new value.
     """
 
-    storage_reads: Set[Bytes32] = field(default_factory=set)
+    storage_reads: Dict[Bytes32, Set[BlockAccessIndex]] = field(default_factory=dict)
     """
-    Set of storage slots that were read but not modified.
+    Mapping from storage slot to set of block access indices where
+    that slot was read but not modified.
     """
 
     balance_changes: List[BalanceChange] = field(default_factory=list)
@@ -72,6 +75,11 @@ class AccountData:
     """
     List of code changes (contract deployments) for this account,
     ordered by transaction index.
+    """
+
+    account_reads: Set[BlockAccessIndex] = field(default_factory=set)
+    """
+    Set of block access indices where this account was accessed but not modified.
     """
 
 
@@ -157,14 +165,18 @@ def add_storage_write(
 
 
 def add_storage_read(
-    builder: BlockAccessListBuilder, address: Address, slot: Bytes32
+    builder: BlockAccessListBuilder,
+    address: Address,
+    slot: Bytes32,
+    block_access_index: BlockAccessIndex,
 ) -> None:
     """
     Add a storage read operation to the block access list.
 
-    Records that a storage slot was read during execution. Storage slots
-    that are both read and written will only appear in the storage changes
-    list, not in the storage reads list, as per [EIP-7928].
+    Records that a storage slot was read during execution with the transaction
+    index where it was read. Storage slots that are both read and written will
+    only appear in the storage changes list, not in the storage reads list,
+    as per [EIP-7928].
 
     Parameters
     ----------
@@ -174,11 +186,18 @@ def add_storage_read(
         The account address whose storage is being read.
     slot :
         The storage slot being read.
+    block_access_index :
+        The block access index for this read (0 for pre-execution,
+        1..n for transactions, n+1 for post-execution).
 
     [EIP-7928]: https://eips.ethereum.org/EIPS/eip-7928
     """
     ensure_account(builder, address)
-    builder.accounts[address].storage_reads.add(slot)
+    
+    if slot not in builder.accounts[address].storage_reads:
+        builder.accounts[address].storage_reads[slot] = set()
+    
+    builder.accounts[address].storage_reads[slot].add(block_access_index)
 
 
 def add_balance_change(
@@ -344,6 +363,45 @@ def add_touched_account(
     ensure_account(builder, address)
 
 
+def add_account_read(
+    builder: BlockAccessListBuilder,
+    address: Address,
+    block_access_index: BlockAccessIndex,
+) -> None:
+    """
+    Add an account read-only access with transaction index.
+
+    Records that an account was accessed during execution without any state
+    changes, tracking the specific transaction index where the access occurred.
+    This is used for operations like [`EXTCODEHASH`], [`BALANCE`],
+    [`EXTCODESIZE`], [`EXTCODECOPY`], and [`STATICCALL`] that read account
+    data without modifying it.
+
+    Parameters
+    ----------
+    builder :
+        The block access list builder instance.
+    address :
+        The account address that was accessed.
+    block_access_index :
+        The block access index for this read (0 for pre-execution,
+        1..n for transactions, n+1 for post-execution).
+
+    [`EXTCODEHASH`] :
+        ref:ethereum.amsterdam.vm.instructions.environment.extcodehash
+    [`BALANCE`] :
+        ref:ethereum.amsterdam.vm.instructions.environment.balance
+    [`EXTCODESIZE`] :
+        ref:ethereum.amsterdam.vm.instructions.environment.extcodesize
+    [`EXTCODECOPY`] :
+        ref:ethereum.amsterdam.vm.instructions.environment.extcodecopy
+    [`STATICCALL`] :
+        ref:ethereum.amsterdam.vm.instructions.system.staticcall
+    """
+    ensure_account(builder, address)
+    builder.accounts[address].account_reads.add(block_access_index)
+
+
 def build_block_access_list(
     builder: BlockAccessListBuilder
 ) -> BlockAccessList:
@@ -383,9 +441,12 @@ def build_block_access_list(
             )
 
         storage_reads = []
-        for slot in changes.storage_reads:
+        for slot, indices in changes.storage_reads.items():
             if slot not in changes.storage_changes:
-                storage_reads.append(slot)
+                sorted_indices = tuple(sorted(indices))
+                storage_reads.append(
+                    SlotReads(slot=slot, block_access_indices=sorted_indices)
+                )
 
         balance_changes = tuple(
             sorted(changes.balance_changes, key=lambda x: x.block_access_index)
@@ -396,9 +457,25 @@ def build_block_access_list(
         code_changes = tuple(
             sorted(changes.code_changes, key=lambda x: x.block_access_index)
         )
+        
+        # Collect all tx indices where account was modified
+        modified_indices = set()
+        for change in changes.balance_changes:
+            modified_indices.add(change.block_access_index)
+        for change in changes.nonce_changes:
+            modified_indices.add(change.block_access_index)
+        for change in changes.code_changes:
+            modified_indices.add(change.block_access_index)
+        
+        # Only include account reads for tx indices where account was NOT modified
+        account_reads = tuple(
+            AccountRead(block_access_index=idx)
+            for idx in sorted(changes.account_reads)
+            if idx not in modified_indices
+        )
 
         storage_changes.sort(key=lambda x: x.slot)
-        storage_reads.sort()
+        storage_reads.sort(key=lambda x: x.slot)
 
         account_change = AccountChanges(
             address=address,
@@ -407,6 +484,7 @@ def build_block_access_list(
             balance_changes=balance_changes,
             nonce_changes=nonce_changes,
             code_changes=code_changes,
+            account_reads=account_reads,
         )
 
         account_changes_list.append(account_change)

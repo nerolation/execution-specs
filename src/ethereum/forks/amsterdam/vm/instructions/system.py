@@ -109,6 +109,9 @@ def generic_create(
         return
 
     evm.accessed_addresses.add(contract_address)
+    
+    # Track contract address before account checks
+    track_address_access(state.change_tracker, contract_address)
 
     if account_has_code_or_nonce(
         state, contract_address
@@ -144,8 +147,6 @@ def generic_create(
         disable_precompiles=False,
         parent_evm=evm,
     )
-
-    track_address_access(state.change_tracker, contract_address)
 
     child_evm = process_create_message(child_message)
 
@@ -341,8 +342,6 @@ def generic_call(
         parent_evm=evm,
     )
 
-    track_address_access(evm.message.block_env.state.change_tracker, to)
-
     child_evm = process_message(child_message)
 
     if child_evm.error:
@@ -419,6 +418,10 @@ def call(evm: Evm) -> None:
     charge_gas(evm, message_call_gas.cost + extend_memory.cost)
     if evm.message.is_static and value != U256(0):
         raise WriteInStaticContext
+    
+    # Track target address after gas charging
+    track_address_access(evm.message.block_env.state.change_tracker, to)
+    
     evm.memory += b"\x00" * extend_memory.expand_by
     sender_balance = get_account(
         evm.message.block_env.state, evm.message.current_target
@@ -484,6 +487,11 @@ def callcode(evm: Evm) -> None:
     else:
         evm.accessed_addresses.add(code_address)
         access_gas_cost = GAS_COLD_ACCOUNT_ACCESS
+    
+    # Track code address before delegation check
+    track_address_access(
+        evm.message.block_env.state.change_tracker, code_address
+    )
 
     (
         disable_precompiles,
@@ -502,10 +510,6 @@ def callcode(evm: Evm) -> None:
         access_gas_cost + transfer_gas_cost,
     )
     charge_gas(evm, message_call_gas.cost + extend_memory.cost)
-
-    track_address_access(
-        evm.message.block_env.state.change_tracker, code_address
-    )
 
     # OPERATION
     evm.memory += b"\x00" * extend_memory.expand_by
@@ -559,6 +563,11 @@ def selfdestruct(evm: Evm) -> None:
     if beneficiary not in evm.accessed_addresses:
         evm.accessed_addresses.add(beneficiary)
         gas_cost += GAS_COLD_ACCOUNT_ACCESS
+    
+    # Track beneficiary address before account check
+    track_address_access(
+        evm.message.block_env.state.change_tracker, beneficiary
+    )
 
     if (
         not is_account_alive(evm.message.block_env.state, beneficiary)
@@ -634,6 +643,11 @@ def delegatecall(evm: Evm) -> None:
     else:
         evm.accessed_addresses.add(code_address)
         access_gas_cost = GAS_COLD_ACCOUNT_ACCESS
+    
+    # Track code address before delegation check
+    track_address_access(
+        evm.message.block_env.state.change_tracker, code_address
+    )
 
     (
         disable_precompiles,
@@ -647,10 +661,6 @@ def delegatecall(evm: Evm) -> None:
         U256(0), gas, Uint(evm.gas_left), extend_memory.cost, access_gas_cost
     )
     charge_gas(evm, message_call_gas.cost + extend_memory.cost)
-
-    track_address_access(
-        evm.message.block_env.state.change_tracker, code_address
-    )
 
     # OPERATION
     evm.memory += b"\x00" * extend_memory.expand_by
@@ -725,6 +735,9 @@ def staticcall(evm: Evm) -> None:
         access_gas_cost,
     )
     charge_gas(evm, message_call_gas.cost + extend_memory.cost)
+    
+    # Track target address after gas charging
+    track_address_access(evm.message.block_env.state.change_tracker, to)
 
     # OPERATION
     evm.memory += b"\x00" * extend_memory.expand_by

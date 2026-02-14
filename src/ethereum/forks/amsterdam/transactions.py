@@ -33,22 +33,6 @@ Base cost of a transaction in gas units. This is the minimum amount of gas
 required to execute a transaction.
 """
 
-FLOOR_CALLDATA_COST = Uint(10)
-"""
-Minimum gas cost per byte of calldata as per [EIP-7623]. Used to calculate
-the minimum gas cost for transactions that include calldata.
-
-[EIP-7623]: https://eips.ethereum.org/EIPS/eip-7623
-"""
-
-STANDARD_CALLDATA_TOKEN_COST = Uint(4)
-"""
-Gas cost per byte of calldata as per [EIP-7623]. Used to calculate the
-gas cost for transactions that include calldata.
-
-[EIP-7623]: https://eips.ethereum.org/EIPS/eip-7623
-"""
-
 TX_CREATE_COST = Uint(32000)
 """
 Additional gas cost for creating a new contract.
@@ -468,12 +452,101 @@ class SetCodeTransaction:
     """
 
 
+@slotted_freezable
+@dataclass
+class DataTransaction:
+    """
+    Transaction type for unified data gas accounting.
+
+    This transaction type extends the blob transaction with explicit
+    data gas pricing, replacing blob gas with a unified data gas dimension
+    that accounts for both transaction serialization bytes and blob bytes.
+    """
+
+    chain_id: U64
+    """
+    The ID of the chain on which this transaction is executed.
+    """
+
+    nonce: U256
+    """
+    A scalar value equal to the number of transactions sent by the sender.
+    """
+
+    max_priority_fee_per_gas: Uint
+    """
+    The maximum priority fee per gas that the sender is willing to pay.
+    """
+
+    max_fee_per_gas: Uint
+    """
+    The maximum fee per gas that the sender is willing to pay, including the
+    base fee and priority fee.
+    """
+
+    gas: Uint
+    """
+    The maximum amount of gas that can be used by this transaction.
+    """
+
+    to: Address
+    """
+    The address of the recipient.
+    """
+
+    value: U256
+    """
+    The amount of ether (in wei) to send with this transaction.
+    """
+
+    data: Bytes
+    """
+    The data payload of the transaction, which can be used to call functions
+    on contracts.
+    """
+
+    access_list: Tuple[Access, ...]
+    """
+    A tuple of `Access` objects that specify which addresses and storage slots
+    are accessed in the transaction.
+    """
+
+    max_fee_per_data_gas: U256
+    """
+    The maximum fee per data gas that the sender is willing to pay.
+    Data gas accounts for both the transaction's serialized size and any
+    blob sidecar data.
+    """
+
+    blob_versioned_hashes: Tuple[VersionedHash, ...]
+    """
+    A tuple of objects that represent the versioned hashes of the blobs
+    included in the transaction.
+    """
+
+    y_parity: U256
+    """
+    The recovery id of the signature.
+    """
+
+    r: U256
+    """
+    The first part of the signature.
+    """
+
+    s: U256
+    """
+    The second part of the signature.
+    """
+
+
 Transaction = (
     LegacyTransaction
     | AccessListTransaction
     | FeeMarketTransaction
     | BlobTransaction
     | SetCodeTransaction
+    | DataTransaction
 )
 """
 Union type representing any valid transaction type.
@@ -498,6 +571,8 @@ def encode_transaction(tx: Transaction) -> LegacyTransaction | Bytes:
         return b"\x03" + rlp.encode(tx)
     elif isinstance(tx, SetCodeTransaction):
         return b"\x04" + rlp.encode(tx)
+    elif isinstance(tx, DataTransaction):
+        return b"\x05" + rlp.encode(tx)
     else:
         raise Exception(f"Unable to encode transaction of type {type(tx)}")
 
@@ -519,13 +594,15 @@ def decode_transaction(tx: LegacyTransaction | Bytes) -> Transaction:
             return rlp.decode_to(BlobTransaction, tx[1:])
         elif tx[0] == 4:
             return rlp.decode_to(SetCodeTransaction, tx[1:])
+        elif tx[0] == 5:
+            return rlp.decode_to(DataTransaction, tx[1:])
         else:
             raise TransactionTypeError(tx[0])
     else:
         return tx
 
 
-def validate_transaction(tx: Transaction) -> Tuple[Uint, Uint]:
+def validate_transaction(tx: Transaction) -> Uint:
     """
     Verifies a transaction.
 
@@ -544,20 +621,19 @@ def validate_transaction(tx: Transaction) -> Tuple[Uint, Uint]:
     limits of the protocol.
 
     This function takes a transaction as a parameter and returns the intrinsic
-    gas cost and the minimum calldata gas cost for the transaction after
-    validation. It throws an `InsufficientTransactionGasError` exception if
-    the transaction does not provide enough gas to cover the intrinsic cost,
-    and a `NonceOverflowError` exception if the nonce is greater than
-    `2**64 - 2`. It also raises an `InitCodeTooLargeError` if the code size of
-    a contract creation transaction exceeds the maximum allowed size.
+    gas cost for the transaction after validation. It throws an
+    `InsufficientTransactionGasError` exception if the transaction does not
+    provide enough gas to cover the intrinsic cost, and a `NonceOverflowError`
+    exception if the nonce is greater than `2**64 - 2`. It also raises an
+    `InitCodeTooLargeError` if the code size of a contract creation
+    transaction exceeds the maximum allowed size.
 
     [EIP-2681]: https://eips.ethereum.org/EIPS/eip-2681
-    [EIP-7623]: https://eips.ethereum.org/EIPS/eip-7623
     """
     from .vm.interpreter import MAX_INIT_CODE_SIZE
 
-    intrinsic_gas, calldata_floor_gas_cost = calculate_intrinsic_cost(tx)
-    if max(intrinsic_gas, calldata_floor_gas_cost) > tx.gas:
+    intrinsic_gas = calculate_intrinsic_cost(tx)
+    if intrinsic_gas > tx.gas:
         raise InsufficientTransactionGasError("Insufficient gas")
     if U256(tx.nonce) >= U256(U64.MAX_VALUE):
         raise NonceOverflowError("Nonce too high")
@@ -566,49 +642,30 @@ def validate_transaction(tx: Transaction) -> Tuple[Uint, Uint]:
     if tx.gas > TX_MAX_GAS_LIMIT:
         raise TransactionGasLimitExceededError("Gas limit too high")
 
-    return intrinsic_gas, calldata_floor_gas_cost
+    return intrinsic_gas
 
 
-def calculate_intrinsic_cost(tx: Transaction) -> Tuple[Uint, Uint]:
+def calculate_intrinsic_cost(tx: Transaction) -> Uint:
     """
     Calculates the gas that is charged before execution is started.
 
     The intrinsic cost of the transaction is charged before execution has
     begun. Functions/operations in the EVM cost money to execute so this
     intrinsic cost is for the operations that need to be paid for as part of
-    the transaction. Data transfer, for example, is part of this intrinsic
-    cost. It costs ether to send data over the wire and that ether is
-    accounted for in the intrinsic cost calculated in this function. This
-    intrinsic cost must be calculated and paid for before execution in order
-    for all operations to be implemented.
+    the transaction. Calldata costs are accounted for separately via the
+    unified data gas dimension.
 
     The intrinsic cost includes:
     1. Base cost (`TX_BASE_COST`)
-    2. Cost for data (zero and non-zero bytes)
-    3. Cost for contract creation (if applicable)
-    4. Cost for access list entries (if applicable)
-    5. Cost for authorizations (if applicable)
-
+    2. Cost for contract creation (if applicable)
+    3. Cost for access list entries (if applicable)
+    4. Cost for authorizations (if applicable)
 
     This function takes a transaction as a parameter and returns the intrinsic
-    gas cost of the transaction and the minimum gas cost used by the
-    transaction based on the calldata size.
+    gas cost of the transaction.
     """
     from .vm.eoa_delegation import PER_EMPTY_ACCOUNT_COST
     from .vm.gas import init_code_cost
-
-    zero_bytes = 0
-    for byte in tx.data:
-        if byte == 0:
-            zero_bytes += 1
-
-    tokens_in_calldata = Uint(zero_bytes + (len(tx.data) - zero_bytes) * 4)
-    # EIP-7623 floor price (note: no EVM costs)
-    calldata_floor_gas_cost = (
-        tokens_in_calldata * FLOOR_CALLDATA_COST + TX_BASE_COST
-    )
-
-    data_cost = tokens_in_calldata * STANDARD_CALLDATA_TOKEN_COST
 
     if tx.to == Bytes0(b""):
         create_cost = TX_CREATE_COST + init_code_cost(ulen(tx.data))
@@ -623,6 +680,7 @@ def calculate_intrinsic_cost(tx: Transaction) -> Tuple[Uint, Uint]:
             FeeMarketTransaction,
             BlobTransaction,
             SetCodeTransaction,
+            DataTransaction,
         ),
     ):
         for access in tx.access_list:
@@ -635,16 +693,7 @@ def calculate_intrinsic_cost(tx: Transaction) -> Tuple[Uint, Uint]:
     if isinstance(tx, SetCodeTransaction):
         auth_cost += Uint(PER_EMPTY_ACCOUNT_COST * len(tx.authorizations))
 
-    return (
-        Uint(
-            TX_BASE_COST
-            + data_cost
-            + create_cost
-            + access_list_cost
-            + auth_cost
-        ),
-        calldata_floor_gas_cost,
-    )
+    return Uint(TX_BASE_COST + create_cost + access_list_cost + auth_cost)
 
 
 def recover_sender(chain_id: U64, tx: Transaction) -> Address:
@@ -706,6 +755,12 @@ def recover_sender(chain_id: U64, tx: Transaction) -> Address:
             raise InvalidSignatureError("bad y_parity")
         public_key = secp256k1_recover(
             r, s, tx.y_parity, signing_hash_7702(tx)
+        )
+    elif isinstance(tx, DataTransaction):
+        if tx.y_parity not in (U256(0), U256(1)):
+            raise InvalidSignatureError("bad y_parity")
+        public_key = secp256k1_recover(
+            r, s, tx.y_parity, signing_hash_data(tx)
         )
 
     return Address(keccak256(public_key)[12:32])
@@ -866,6 +921,33 @@ def signing_hash_7702(tx: SetCodeTransaction) -> Hash32:
                 tx.data,
                 tx.access_list,
                 tx.authorizations,
+            )
+        )
+    )
+
+
+def signing_hash_data(tx: DataTransaction) -> Hash32:
+    """
+    Compute the hash of a DataTransaction used for signing.
+
+    This function takes a data transaction as a parameter and returns the
+    signing hash of the transaction.
+    """
+    return keccak256(
+        b"\x05"
+        + rlp.encode(
+            (
+                tx.chain_id,
+                tx.nonce,
+                tx.max_priority_fee_per_gas,
+                tx.max_fee_per_gas,
+                tx.gas,
+                tx.to,
+                tx.value,
+                tx.data,
+                tx.access_list,
+                tx.max_fee_per_data_gas,
+                tx.blob_versioned_hashes,
             )
         )
     )

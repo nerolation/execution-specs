@@ -35,9 +35,9 @@ from .blocks import Block, Header, Log, Receipt, Withdrawal, encode_receipt
 from .bloom import logs_bloom
 from .exceptions import (
     BlobCountExceededError,
-    BlobGasLimitExceededError,
+    DataGasLimitExceededError,
     EmptyAuthorizationListError,
-    InsufficientMaxFeePerBlobGasError,
+    InsufficientMaxFeePerDataGasError,
     InsufficientMaxFeePerGasError,
     InvalidBlobVersionedHashError,
     NoBlobDataError,
@@ -78,6 +78,7 @@ from .state_tracker import (
 from .transactions import (
     AccessListTransaction,
     BlobTransaction,
+    DataTransaction,
     FeeMarketTransaction,
     LegacyTransaction,
     SetCodeTransaction,
@@ -94,12 +95,13 @@ from .utils.message import prepare_message
 from .vm import Message
 from .vm.eoa_delegation import is_valid_delegation
 from .vm.gas import (
-    BLOB_SCHEDULE_MAX,
-    GAS_PER_BLOB,
-    calculate_blob_gas_price,
+    BYTES_PER_BLOB,
+    DATA_GAS_SCHEDULE_MAX,
+    calculate_calldata_gas,
     calculate_data_fee,
-    calculate_excess_blob_gas,
-    calculate_total_blob_gas,
+    calculate_data_gas_price,
+    calculate_excess_data_gas,
+    calculate_total_data_gas,
 )
 from .vm.interpreter import MessageCallOutput, process_message_call
 
@@ -113,7 +115,7 @@ BEACON_ROOTS_ADDRESS = hex_to_address(
     "0x000F3df6D732807Ef1319fB7B8bB8522d0Beac02"
 )
 SYSTEM_TRANSACTION_GAS = Uint(30000000)
-MAX_BLOB_GAS_PER_BLOCK = BLOB_SCHEDULE_MAX * GAS_PER_BLOB
+MAX_DATA_GAS_PER_BLOCK = DATA_GAS_SCHEDULE_MAX * BYTES_PER_BLOB
 VERSIONED_HASH_VERSION_KZG = b"\x01"
 
 WITHDRAWAL_REQUEST_PREDEPLOY_ADDRESS = hex_to_address(
@@ -246,7 +248,7 @@ def state_transition(chain: BlockChain, block: Block) -> None:
         base_fee_per_gas=block.header.base_fee_per_gas,
         time=block.header.timestamp,
         prev_randao=block.header.prev_randao,
-        excess_blob_gas=block.header.excess_blob_gas,
+        excess_data_gas=block.header.excess_data_gas,
         parent_beacon_block_root=block.header.parent_beacon_block_root,
         state_changes=StateChanges(),
     )
@@ -280,7 +282,7 @@ def state_transition(chain: BlockChain, block: Block) -> None:
         raise InvalidBlock
     if withdrawals_root != block.header.withdrawals_root:
         raise InvalidBlock
-    if block_output.blob_gas_used != block.header.blob_gas_used:
+    if block_output.data_gas_used != block.header.data_gas_used:
         raise InvalidBlock
     if requests_hash != block.header.requests_hash:
         raise InvalidBlock
@@ -381,8 +383,8 @@ def validate_header(chain: BlockChain, header: Header) -> None:
 
     parent_header = chain.blocks[-1].header
 
-    excess_blob_gas = calculate_excess_blob_gas(parent_header)
-    if header.excess_blob_gas != excess_blob_gas:
+    excess_data_gas = calculate_excess_data_gas(parent_header)
+    if header.excess_data_gas != excess_data_gas:
         raise InvalidBlock
 
     if header.gas_used > header.gas_limit:
@@ -418,9 +420,13 @@ def check_transaction(
     block_env: vm.BlockEnvironment,
     block_output: vm.BlockOutput,
     tx: Transaction,
-) -> Tuple[Address, Uint, Tuple[VersionedHash, ...], U64]:
+) -> Tuple[Address, Uint, Tuple[VersionedHash, ...], U64, Uint]:
     """
     Check if the transaction is includable in the block.
+
+    For legacy transaction types, the gas limit is partitioned into execution
+    gas and data gas (per EIP-7999). The existing gas_price/max_fee_per_gas
+    serves as the budget for both dimensions.
 
     Parameters
     ----------
@@ -439,8 +445,10 @@ def check_transaction(
         The price to charge for gas when the transaction is executed.
     blob_versioned_hashes :
         The blob versioned hashes of the transaction.
-    tx_blob_gas_used:
-        The blob gas used by the transaction.
+    tx_data_gas_used :
+        The data gas used by the transaction.
+    execution_gas :
+        The gas available for execution (after partitioning for legacy txs).
 
     Raises
     ------
@@ -458,18 +466,17 @@ def check_transaction(
         If the priority fee is greater than the maximum fee per gas.
     InsufficientMaxFeePerGasError :
         If the maximum fee per gas is insufficient for the transaction.
-    InsufficientMaxFeePerBlobGasError :
-        If the maximum fee per blob gas is insufficient for the transaction.
-    BlobGasLimitExceededError :
-        If the blob gas used by the transaction exceeds the block's blob gas
-        limit.
+    InsufficientMaxFeePerDataGasError :
+        If the maximum fee per data gas is insufficient for the transaction.
+    DataGasLimitExceededError :
+        If the data gas used by the transaction exceeds the block's limit.
     InvalidBlobVersionedHashError :
         If the transaction contains a blob versioned hash with an invalid
         version.
     NoBlobDataError :
-        If the transaction is a type 3 but has no blobs.
+        If the transaction is a type 3 or 5 but has no blobs.
     BlobCountExceededError :
-        If the transaction is a type 3 and has more blobs than the limit.
+        If the transaction is a type 3 or 5 and has more blobs than the limit.
     TransactionTypeContractCreationError:
         If the transaction type is not allowed to create contracts.
     EmptyAuthorizationListError :
@@ -477,22 +484,21 @@ def check_transaction(
         is empty.
 
     """
-    gas_available = block_env.block_gas_limit - block_output.block_gas_used
-    blob_gas_available = MAX_BLOB_GAS_PER_BLOCK - block_output.blob_gas_used
-
-    if tx.gas > gas_available:
-        raise GasUsedExceedsLimitError("gas used exceeds limit")
-
-    tx_blob_gas_used = calculate_total_blob_gas(tx)
-    if tx_blob_gas_used > blob_gas_available:
-        raise BlobGasLimitExceededError("blob gas limit exceeded")
+    data_gas_available = MAX_DATA_GAS_PER_BLOCK - block_output.data_gas_used
+    tx_data_gas_used = calculate_total_data_gas(tx)
+    if tx_data_gas_used > data_gas_available:
+        raise DataGasLimitExceededError("data gas limit exceeded")
 
     sender_address = recover_sender(block_env.chain_id, tx)
     sender_account = get_account(block_env.state, sender_address)
+    data_gas_price = calculate_data_gas_price(block_env.excess_data_gas)
 
-    if isinstance(
-        tx, (FeeMarketTransaction, BlobTransaction, SetCodeTransaction)
-    ):
+    if isinstance(tx, DataTransaction):
+        execution_gas = tx.gas
+        gas_available = block_env.block_gas_limit - block_output.block_gas_used
+        if execution_gas > gas_available:
+            raise GasUsedExceedsLimitError("gas used exceeds limit")
+
         if tx.max_fee_per_gas < tx.max_priority_fee_per_gas:
             raise PriorityFeeGreaterThanMaxFeeError(
                 "priority fee greater than max fee"
@@ -507,14 +513,72 @@ def check_transaction(
             tx.max_fee_per_gas - block_env.base_fee_per_gas,
         )
         effective_gas_price = priority_fee_per_gas + block_env.base_fee_per_gas
-        max_gas_fee = tx.gas * tx.max_fee_per_gas
-    else:
-        if tx.gas_price < block_env.base_fee_per_gas:
-            raise InvalidBlock
-        effective_gas_price = tx.gas_price
-        max_gas_fee = tx.gas * tx.gas_price
 
-    if isinstance(tx, BlobTransaction):
+        if Uint(tx.max_fee_per_data_gas) < data_gas_price:
+            raise InsufficientMaxFeePerDataGasError(
+                "insufficient max fee per data gas"
+            )
+
+        max_gas_fee = tx.gas * tx.max_fee_per_gas + Uint(
+            tx_data_gas_used
+        ) * Uint(tx.max_fee_per_data_gas)
+    else:
+        calldata_gas = calculate_calldata_gas(tx)
+        execution_gas = Uint(tx.gas) - Uint(calldata_gas)
+
+        if execution_gas <= Uint(0):
+            raise GasUsedExceedsLimitError(
+                "insufficient gas for execution after calldata"
+            )
+
+        gas_available = block_env.block_gas_limit - block_output.block_gas_used
+        if execution_gas > gas_available:
+            raise GasUsedExceedsLimitError("gas used exceeds limit")
+
+        if isinstance(
+            tx, (FeeMarketTransaction, BlobTransaction, SetCodeTransaction)
+        ):
+            if tx.max_fee_per_gas < tx.max_priority_fee_per_gas:
+                raise PriorityFeeGreaterThanMaxFeeError(
+                    "priority fee greater than max fee"
+                )
+            if tx.max_fee_per_gas < block_env.base_fee_per_gas:
+                raise InsufficientMaxFeePerGasError(
+                    tx.max_fee_per_gas, block_env.base_fee_per_gas
+                )
+            max_fee_per_gas = tx.max_fee_per_gas
+            priority_fee_per_gas = min(
+                tx.max_priority_fee_per_gas,
+                tx.max_fee_per_gas - block_env.base_fee_per_gas,
+            )
+            effective_gas_price = (
+                priority_fee_per_gas + block_env.base_fee_per_gas
+            )
+        else:
+            if tx.gas_price < block_env.base_fee_per_gas:
+                raise InvalidBlock
+            max_fee_per_gas = tx.gas_price
+            effective_gas_price = tx.gas_price
+
+        total_base_cost = (
+            execution_gas * block_env.base_fee_per_gas
+            + Uint(tx_data_gas_used) * data_gas_price
+        )
+        total_budget = tx.gas * max_fee_per_gas
+        if total_base_cost > total_budget:
+            raise InsufficientMaxFeePerDataGasError(
+                "gas price insufficient to cover data gas"
+            )
+
+        if isinstance(tx, BlobTransaction):
+            if Uint(tx.max_fee_per_blob_gas) < data_gas_price:
+                raise InsufficientMaxFeePerDataGasError(
+                    "insufficient max fee per blob gas"
+                )
+
+        max_gas_fee = total_budget
+
+    if isinstance(tx, (BlobTransaction, DataTransaction)):
         blob_count = len(tx.blob_versioned_hashes)
         if blob_count == 0:
             raise NoBlobDataError("no blob data in transaction")
@@ -527,21 +591,11 @@ def check_transaction(
                 raise InvalidBlobVersionedHashError(
                     "invalid blob versioned hash"
                 )
-
-        blob_gas_price = calculate_blob_gas_price(block_env.excess_blob_gas)
-        if Uint(tx.max_fee_per_blob_gas) < blob_gas_price:
-            raise InsufficientMaxFeePerBlobGasError(
-                "insufficient max fee per blob gas"
-            )
-
-        max_gas_fee += Uint(calculate_total_blob_gas(tx)) * Uint(
-            tx.max_fee_per_blob_gas
-        )
         blob_versioned_hashes = tx.blob_versioned_hashes
     else:
         blob_versioned_hashes = ()
 
-    if isinstance(tx, (BlobTransaction, SetCodeTransaction)):
+    if isinstance(tx, (BlobTransaction, SetCodeTransaction, DataTransaction)):
         if not isinstance(tx.to, Address):
             raise TransactionTypeContractCreationError(tx)
 
@@ -563,7 +617,8 @@ def check_transaction(
         sender_address,
         effective_gas_price,
         blob_versioned_hashes,
-        tx_blob_gas_used,
+        tx_data_gas_used,
+        execution_gas,
     )
 
 
@@ -932,13 +987,14 @@ def process_transaction(
         encode_transaction(tx),
     )
 
-    intrinsic_gas, calldata_floor_gas_cost = validate_transaction(tx)
+    intrinsic_gas = validate_transaction(tx)
 
     (
         sender,
         effective_gas_price,
         blob_versioned_hashes,
-        tx_blob_gas_used,
+        tx_data_gas_used,
+        execution_gas,
     ) = check_transaction(
         block_env=block_env,
         block_output=block_output,
@@ -946,15 +1002,10 @@ def process_transaction(
     )
 
     sender_account = get_account(block_env.state, sender)
+    data_gas_fee = calculate_data_fee(block_env.excess_data_gas, tx)
+    effective_gas_fee = execution_gas * effective_gas_price
 
-    if isinstance(tx, BlobTransaction):
-        blob_gas_fee = calculate_data_fee(block_env.excess_blob_gas, tx)
-    else:
-        blob_gas_fee = Uint(0)
-
-    effective_gas_fee = tx.gas * effective_gas_price
-
-    gas = tx.gas - intrinsic_gas
+    gas = execution_gas - intrinsic_gas
 
     # Track sender nonce increment
     increment_nonce(block_env.state, sender)
@@ -967,7 +1018,7 @@ def process_transaction(
     capture_pre_balance(tx_state_changes, sender, sender_balance_before)
 
     sender_balance_after_gas_fee = (
-        Uint(sender_account.balance) - effective_gas_fee - blob_gas_fee
+        Uint(sender_account.balance) - effective_gas_fee - data_gas_fee
     )
     set_account_balance(
         block_env.state, sender, U256(sender_balance_after_gas_fee)
@@ -988,6 +1039,7 @@ def process_transaction(
             FeeMarketTransaction,
             BlobTransaction,
             SetCodeTransaction,
+            DataTransaction,
         ),
     ):
         for access in tx.access_list:
@@ -1021,21 +1073,13 @@ def process_transaction(
 
     tx_output = process_message_call(message)
 
-    # For EIP-7623 we first calculate the execution_gas_used, which includes
-    # the execution gas refund.
-    tx_gas_used_before_refund = tx.gas - tx_output.gas_left
+    tx_gas_used_before_refund = execution_gas - tx_output.gas_left
     tx_gas_refund = min(
         tx_gas_used_before_refund // Uint(5), Uint(tx_output.refund_counter)
     )
     tx_gas_used_after_refund = tx_gas_used_before_refund - tx_gas_refund
 
-    # Transactions with less execution_gas_used than the floor pay at the
-    # floor cost.
-    tx_gas_used_after_refund = max(
-        tx_gas_used_after_refund, calldata_floor_gas_cost
-    )
-
-    tx_gas_left = tx.gas - tx_gas_used_after_refund
+    tx_gas_left = execution_gas - tx_gas_used_after_refund
     gas_refund_amount = tx_gas_left * effective_gas_price
 
     # For non-1559 transactions effective_gas_price == tx.gas_price
@@ -1072,7 +1116,7 @@ def process_transaction(
         destroy_account(block_env.state, block_env.coinbase)
 
     block_output.block_gas_used += tx_gas_used_after_refund
-    block_output.blob_gas_used += tx_blob_gas_used
+    block_output.data_gas_used += tx_data_gas_used
 
     receipt = make_receipt(
         tx, tx_output.error, block_output.block_gas_used, tx_output.logs

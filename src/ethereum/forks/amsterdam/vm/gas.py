@@ -20,7 +20,12 @@ from ethereum.trace import GasAndRefund, evm_trace
 from ethereum.utils.numeric import ceil32, taylor_exponential
 
 from ..blocks import Header
-from ..transactions import BlobTransaction, Transaction
+from ..transactions import (
+    BlobTransaction,
+    DataTransaction,
+    Transaction,
+    encode_transaction,
+)
 from . import Evm
 from .exceptions import OutOfGasError
 
@@ -69,13 +74,15 @@ GAS_INIT_CODE_WORD_COST = Uint(2)
 GAS_BLOBHASH_OPCODE = Uint(3)
 GAS_POINT_EVALUATION = Uint(50000)
 
-GAS_PER_BLOB = U64(2**17)
-BLOB_SCHEDULE_TARGET = U64(14)
-TARGET_BLOB_GAS_PER_BLOCK = GAS_PER_BLOB * BLOB_SCHEDULE_TARGET
-BLOB_BASE_COST = Uint(2**13)
-BLOB_SCHEDULE_MAX = U64(21)
-MIN_BLOB_GASPRICE = Uint(1)
-BLOB_BASE_FEE_UPDATE_FRACTION = Uint(11684671)
+# Data gas constants for unified data availability accounting.
+# Data gas accounts for both transaction serialization bytes and blob bytes.
+BYTES_PER_BLOB = U64(2**17)  # 131072 bytes (128 KiB) per blob
+DATA_GAS_SCHEDULE_TARGET = U64(14)  # Target number of blobs worth of data
+TARGET_DATA_GAS_PER_BLOCK = BYTES_PER_BLOB * DATA_GAS_SCHEDULE_TARGET
+DATA_BASE_COST = Uint(2**13)  # Base cost for data gas pricing
+DATA_GAS_SCHEDULE_MAX = U64(28)  # Max blobs worth of data (28 = 14 target * 2)
+MIN_DATA_GAS_PRICE = Uint(1)  # Minimum data gas price in wei
+DATA_GAS_UPDATE_FRACTION = Uint(11684671)  # Fee adjustment parameter
 
 GAS_BLS_G1_ADD = Uint(375)
 GAS_BLS_G1_MUL = Uint(12000)
@@ -303,10 +310,38 @@ def init_code_cost(init_code_length: Uint) -> Uint:
     return GAS_INIT_CODE_WORD_COST * ceil32(init_code_length) // Uint(32)
 
 
-def calculate_excess_blob_gas(parent_header: Header) -> U64:
+def calculate_calldata_gas(tx: Transaction) -> U64:
     """
-    Calculates the excess blob gas for the current block based
-    on the gas used in the parent block.
+    Calculate calldata gas for a transaction using token counting.
+
+    This computes the calldata gas as: zero_bytes + 4 * non_zero_bytes,
+    which matches the traditional calldata pricing. Used for partitioning
+    the gas limit of legacy transaction types.
+
+    Parameters
+    ----------
+    tx :
+        The transaction for which calldata gas is calculated.
+
+    Returns
+    -------
+    calldata_gas : `U64`
+        The calldata gas in tokens.
+
+    """
+    zero_bytes = 0
+    for byte in tx.data:
+        if byte == 0:
+            zero_bytes += 1
+
+    non_zero_bytes = len(tx.data) - zero_bytes
+    return U64(zero_bytes + 4 * non_zero_bytes)
+
+
+def calculate_excess_data_gas(parent_header: Header) -> U64:
+    """
+    Calculates the excess data gas for the current block based
+    on the data gas used in the parent block.
 
     Parameters
     ----------
@@ -315,99 +350,118 @@ def calculate_excess_blob_gas(parent_header: Header) -> U64:
 
     Returns
     -------
-    excess_blob_gas: `ethereum.base_types.U64`
-        The excess blob gas for the current block.
+    excess_data_gas: `ethereum.base_types.U64`
+        The excess data gas for the current block.
 
     """
     # At the fork block, these are defined as zero.
-    excess_blob_gas = U64(0)
-    blob_gas_used = U64(0)
+    excess_data_gas = U64(0)
+    data_gas_used = U64(0)
     base_fee_per_gas = Uint(0)
 
     if isinstance(parent_header, Header):
         # After the fork block, read them from the parent header.
-        excess_blob_gas = parent_header.excess_blob_gas
-        blob_gas_used = parent_header.blob_gas_used
+        excess_data_gas = parent_header.excess_data_gas
+        data_gas_used = parent_header.data_gas_used
         base_fee_per_gas = parent_header.base_fee_per_gas
 
-    parent_blob_gas = excess_blob_gas + blob_gas_used
-    if parent_blob_gas < TARGET_BLOB_GAS_PER_BLOCK:
+    parent_data_gas = excess_data_gas + data_gas_used
+    if parent_data_gas < TARGET_DATA_GAS_PER_BLOCK:
         return U64(0)
 
-    target_blob_gas_price = Uint(GAS_PER_BLOB)
-    target_blob_gas_price *= calculate_blob_gas_price(excess_blob_gas)
+    target_data_gas_price = Uint(BYTES_PER_BLOB)
+    target_data_gas_price *= calculate_data_gas_price(excess_data_gas)
 
-    base_blob_tx_price = BLOB_BASE_COST * base_fee_per_gas
-    if base_blob_tx_price > target_blob_gas_price:
-        blob_schedule_delta = BLOB_SCHEDULE_MAX - BLOB_SCHEDULE_TARGET
+    base_data_tx_price = DATA_BASE_COST * base_fee_per_gas
+    if base_data_tx_price > target_data_gas_price:
+        data_schedule_delta = DATA_GAS_SCHEDULE_MAX - DATA_GAS_SCHEDULE_TARGET
         return (
-            excess_blob_gas
-            + blob_gas_used * blob_schedule_delta // BLOB_SCHEDULE_MAX
+            excess_data_gas
+            + data_gas_used * data_schedule_delta // DATA_GAS_SCHEDULE_MAX
         )
 
-    return parent_blob_gas - TARGET_BLOB_GAS_PER_BLOCK
+    return parent_data_gas - TARGET_DATA_GAS_PER_BLOCK
 
 
-def calculate_total_blob_gas(tx: Transaction) -> U64:
+def calculate_total_data_gas(tx: Transaction) -> U64:
     """
-    Calculate the total blob gas for a transaction.
+    Calculate the total data gas for a transaction.
+
+    For DataTransaction (Type 5): uses serialized bytes + blob bytes.
+    For legacy types: uses calldata tokens (for backwards compatibility
+    with gas limit partitioning per EIP-7999).
 
     Parameters
     ----------
     tx :
-        The transaction for which the blob gas is to be calculated.
+        The transaction for which the data gas is to be calculated.
 
     Returns
     -------
-    total_blob_gas: `ethereum.base_types.Uint`
-        The total blob gas for the transaction.
+    total_data_gas: `ethereum.base_types.U64`
+        The total data gas for the transaction.
 
     """
-    if isinstance(tx, BlobTransaction):
-        return GAS_PER_BLOB * U64(len(tx.blob_versioned_hashes))
+    if isinstance(tx, DataTransaction):
+        from ethereum_rlp import rlp
+
+        from ..transactions import LegacyTransaction
+
+        encoded = encode_transaction(tx)
+        if isinstance(encoded, LegacyTransaction):
+            tx_bytes = U64(len(rlp.encode(encoded)))
+        else:
+            tx_bytes = U64(len(encoded))
+
+        blob_bytes = BYTES_PER_BLOB * U64(len(tx.blob_versioned_hashes))
+        return tx_bytes + blob_bytes
     else:
-        return U64(0)
+        calldata_gas = calculate_calldata_gas(tx)
+        if isinstance(tx, BlobTransaction):
+            blob_bytes = BYTES_PER_BLOB * U64(len(tx.blob_versioned_hashes))
+            return calldata_gas + blob_bytes
+        return calldata_gas
 
 
-def calculate_blob_gas_price(excess_blob_gas: U64) -> Uint:
+def calculate_data_gas_price(excess_data_gas: U64) -> Uint:
     """
-    Calculate the blob gasprice for a block.
+    Calculate the data gasprice for a block.
 
     Parameters
     ----------
-    excess_blob_gas :
-        The excess blob gas for the block.
+    excess_data_gas :
+        The excess data gas for the block.
 
     Returns
     -------
-    blob_gasprice: `Uint`
-        The blob gasprice.
+    data_gasprice: `Uint`
+        The data gasprice.
 
     """
     return taylor_exponential(
-        MIN_BLOB_GASPRICE,
-        Uint(excess_blob_gas),
-        BLOB_BASE_FEE_UPDATE_FRACTION,
+        MIN_DATA_GAS_PRICE,
+        Uint(excess_data_gas),
+        DATA_GAS_UPDATE_FRACTION,
     )
 
 
-def calculate_data_fee(excess_blob_gas: U64, tx: Transaction) -> Uint:
+def calculate_data_fee(excess_data_gas: U64, tx: Transaction) -> Uint:
     """
-    Calculate the blob data fee for a transaction.
+    Calculate the data fee for a transaction.
 
     Parameters
     ----------
-    excess_blob_gas :
-        The excess_blob_gas for the execution.
+    excess_data_gas :
+        The excess_data_gas for the execution.
     tx :
-        The transaction for which the blob data fee is to be calculated.
+        The transaction for which the data fee is to be calculated.
 
     Returns
     -------
     data_fee: `Uint`
-        The blob data fee.
+        The data fee.
 
     """
-    return Uint(calculate_total_blob_gas(tx)) * calculate_blob_gas_price(
-        excess_blob_gas
+    return Uint(calculate_total_data_gas(tx)) * calculate_data_gas_price(
+        excess_data_gas
     )

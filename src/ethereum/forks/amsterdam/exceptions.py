@@ -47,15 +47,15 @@ class TransactionTypeContractCreationError(InvalidTransaction):
         self.transaction = transaction
 
 
-class BlobGasLimitExceededError(InvalidTransaction):
+class DataGasLimitExceededError(InvalidTransaction):
     """
-    The blob gas limit for the transaction exceeds the maximum allowed.
+    The data gas limit for the transaction exceeds the maximum allowed.
     """
 
 
-class InsufficientMaxFeePerBlobGasError(InvalidTransaction):
+class InsufficientMaxFeePerDataGasError(InvalidTransaction):
     """
-    The maximum fee per blob gas is insufficient for the transaction.
+    The maximum fee per data gas is insufficient for the transaction.
     """
 
 

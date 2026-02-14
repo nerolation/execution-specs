@@ -47,7 +47,7 @@ class BlockEnvironment:
     base_fee_per_gas: Uint
     time: U256
     prev_randao: Bytes32
-    excess_blob_gas: U64
+    excess_data_gas: U64
     parent_beacon_block_root: Hash32
     state_changes: StateChanges
 
@@ -72,8 +72,9 @@ class BlockOutput:
         block.
     withdrawals_trie : `ethereum.fork_types.Root`
         Trie root of all the withdrawals in the block.
-    blob_gas_used : `ethereum.base_types.U64`
-        Total blob gas used in the block.
+    data_gas_used : `ethereum.base_types.U64`
+        Total data gas used in the block. Data gas accounts for both
+        transaction serialization bytes and blob sidecar bytes.
     requests : `Bytes`
         Hash of all the requests in the block.
     block_access_list: `BlockAccessList`
@@ -92,7 +93,7 @@ class BlockOutput:
     withdrawals_trie: Trie[Bytes, Optional[Bytes | Withdrawal]] = field(
         default_factory=lambda: Trie(secured=False, default=None)
     )
-    blob_gas_used: U64 = U64(0)
+    data_gas_used: U64 = U64(0)
     requests: List[Bytes] = field(default_factory=list)
     block_access_list: BlockAccessList = field(default_factory=list)
 

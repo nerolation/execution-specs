@@ -23,6 +23,7 @@ from .fork_types import Address, Bloom, Root
 from .transactions import (
     AccessListTransaction,
     BlobTransaction,
+    DataTransaction,
     FeeMarketTransaction,
     LegacyTransaction,
     SetCodeTransaction,
@@ -209,22 +210,19 @@ class Header:
     block.
     """
 
-    blob_gas_used: U64
+    data_gas_used: U64
     """
-    Total blob gas consumed by the transactions within this block. Introduced
-    in [EIP-4844].
-
-    [EIP-4844]: https://eips.ethereum.org/EIPS/eip-4844
+    Total data gas consumed by the transactions within this block. Data gas
+    accounts for both transaction serialization bytes and blob sidecar bytes
+    in a unified dimension.
     """
 
-    excess_blob_gas: U64
+    excess_data_gas: U64
     """
-    Running total of blob gas consumed in excess of the target, prior to this
-    block. Blocks with above-target blob gas consumption increase this value,
-    while blocks with below-target blob gas consumption decrease it (to a
-    minimum of zero). Introduced in [EIP-4844].
-
-    [EIP-4844]: https://eips.ethereum.org/EIPS/eip-4844
+    Running total of data gas consumed in excess of the target, prior to this
+    block. Blocks with above-target data gas consumption increase this value,
+    while blocks with below-target data gas consumption decrease it (to a
+    minimum of zero). Used for EIP-1559-style pricing of data availability.
     """
 
     parent_beacon_block_root: Root
@@ -381,6 +379,7 @@ def encode_receipt(tx: Transaction, receipt: Receipt) -> Bytes | Receipt:
     - FeeMarketTransaction receipts are prefixed with `b"\x02"`.
     - BlobTransaction receipts are prefixed with `b"\x03"`.
     - SetCodeTransaction receipts are prefixed with `b"\x04"`.
+    - DataTransaction receipts are prefixed with `b"\x05"`.
     - LegacyTransaction receipts are returned as is.
     """
     if isinstance(tx, AccessListTransaction):
@@ -391,6 +390,8 @@ def encode_receipt(tx: Transaction, receipt: Receipt) -> Bytes | Receipt:
         return b"\x03" + rlp.encode(receipt)
     elif isinstance(tx, SetCodeTransaction):
         return b"\x04" + rlp.encode(receipt)
+    elif isinstance(tx, DataTransaction):
+        return b"\x05" + rlp.encode(receipt)
     else:
         return receipt
 
@@ -408,10 +409,12 @@ def decode_receipt(receipt: Bytes | Receipt) -> Receipt:
     receipts.
     - Receipts prefixed with `b"\x04"` are decoded as SetCodeTransaction
     receipts.
+    - Receipts prefixed with `b"\x05"` are decoded as DataTransaction
+    receipts.
     - LegacyTransaction receipts are returned as is.
     """
     if isinstance(receipt, Bytes):
-        assert receipt[0] in (1, 2, 3, 4)
+        assert receipt[0] in (1, 2, 3, 4, 5)
         return rlp.decode_to(Receipt, receipt[1:])
     else:
         return receipt

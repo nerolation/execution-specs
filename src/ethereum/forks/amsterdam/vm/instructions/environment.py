@@ -34,7 +34,7 @@ from ..gas import (
     GAS_RETURN_DATA_COPY,
     GAS_VERY_LOW,
     GAS_WARM_ACCESS,
-    calculate_blob_gas_price,
+    calculate_data_gas_price,
     calculate_gas_extend_memory,
     charge_gas,
 )
@@ -592,7 +592,7 @@ def blob_hash(evm: Evm) -> None:
 
 def blob_base_fee(evm: Evm) -> None:
     """
-    Pushes the blob base fee on to the stack.
+    Pushes the data base fee on to the stack.
 
     Parameters
     ----------
@@ -607,10 +607,10 @@ def blob_base_fee(evm: Evm) -> None:
     charge_gas(evm, GAS_BASE)
 
     # OPERATION
-    blob_base_fee = calculate_blob_gas_price(
-        evm.message.block_env.excess_blob_gas
+    data_base_fee = calculate_data_gas_price(
+        evm.message.block_env.excess_data_gas
     )
-    push(evm.stack, U256(blob_base_fee))
+    push(evm.stack, U256(data_base_fee))
 
     # PROGRAM COUNTER
     evm.pc += Uint(1)

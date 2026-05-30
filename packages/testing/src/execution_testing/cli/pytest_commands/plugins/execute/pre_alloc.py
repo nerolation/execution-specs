@@ -727,6 +727,13 @@ class Alloc(SharedAlloc):
         fork = self._fork.fork_at(
             block_number=self._block_number, timestamp=self._timestamp
         )
+        # Deploy through the same factory the contract addresses were computed
+        # from: the fork's predeploy (EIP-7997) when present, otherwise the
+        # Nick's-method factory.
+        factory_address = (
+            fork.deterministic_factory_predeploy_address()
+            or DETERMINISTIC_FACTORY_ADDRESS
+        )
         self._deferred_deterministic_deploys = []
 
         addresses = [d.contract_address for d in deferred]
@@ -763,7 +770,7 @@ class Alloc(SharedAlloc):
                 deploy_tx = self._add_pending_tx(
                     action="deterministic_deploy_contract",
                     target=d.label,
-                    to=DETERMINISTIC_FACTORY_ADDRESS,
+                    to=factory_address,
                     data=Bytes(d.salt) + Bytes(d.initcode),
                     gas_limit=d.deploy_gas_limit,
                     value=0,

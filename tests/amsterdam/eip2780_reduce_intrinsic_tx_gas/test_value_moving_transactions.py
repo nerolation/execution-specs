@@ -237,6 +237,7 @@ def test_intrinsic_decomposition_across_tx_types(
         sends_value=True,
         recipient_type=RecipientType.EOA,
         authorization_list_or_count=authorizations,
+        blob_versioned_hashes_or_count=blob_versioned_hashes,
         return_cost_deducted_prior_execution=True,
     )
     top_frame_gas = fork.transaction_top_frame_execution_gas(
@@ -249,7 +250,17 @@ def test_intrinsic_decomposition_across_tx_types(
         recipient_type=RecipientType.EOA,
         authorizations=authorizations,
     )
-    total_gas_cost = intrinsic_gas + top_frame_gas + top_frame_state_gas
+    # The blob hashes alone lift the type-3 floor above its intrinsic.
+    floor_gas = fork.transaction_data_floor_cost_calculator()(
+        data=b"",
+        sends_value=True,
+        recipient_type=RecipientType.EOA,
+        authorization_list_or_count=authorizations,
+        blob_versioned_hashes_or_count=blob_versioned_hashes,
+    )
+    total_gas_cost = max(
+        intrinsic_gas + top_frame_gas + top_frame_state_gas, floor_gas
+    )
 
     tx = Transaction(
         ty=tx_type,

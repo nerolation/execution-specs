@@ -106,6 +106,19 @@ class GasCosts:
 
     # Block Access Lists
     BLOCK_ACCESS_LIST_ITEM: int
+    # Floor gas per byte of transaction content and block access list
+    # data; 0 before EIP-7976 prices every byte at one rate.
+    FLOOR_GAS_PER_BYTE: int = 0
+    # Bytes an entry adds to the block access list; 0 before EIP-8279
+    # meters them.
+    BAL_BYTES_PER_ADDRESS: int = 0
+    BAL_BYTES_PER_STORAGE_KEY: int = 0
+    BAL_BYTES_PER_STORAGE_VALUE: int = 0
+    BAL_BYTES_PER_BALANCE: int = 0
+    BAL_BYTES_PER_NONCE: int = 0
+    # Block access list bytes an applied EIP-7702 authorization adds:
+    # the authority's address, delegation code, and nonce.
+    AUTH_BAL_BYTES: int = 0
 
     # Opcodes
     OPCODE_ADD: int

@@ -824,9 +824,11 @@ def test_auth_intrinsic_at_transition(
     creation and the delegation-write base) out of the intrinsic and into
     the top frame, leaving only ``EXECUTION_PER_AUTH_BASE_COST`` in the
     intrinsic. The post-fork single-authorization intrinsic is
-    therefore strictly smaller than the pre-fork one, so a tx whose
-    ``gas_limit`` equals the (lower) post-fork intrinsic is rejected with
-    ``INTRINSIC_GAS_TOO_LOW`` before the fork but valid after.
+    therefore strictly smaller than the pre-fork one; post-fork the
+    authorization's floor (EIP-8279) is the minimum instead, still below
+    the pre-fork intrinsic, so a tx whose ``gas_limit`` equals that floor
+    is rejected with ``INTRINSIC_GAS_TOO_LOW`` before the fork but valid
+    after.
     """
     before = fork.fork_at(timestamp=BEFORE_TS)
     after = fork.fork_at(timestamp=AFTER_TS)
@@ -840,9 +842,13 @@ def test_auth_intrinsic_at_transition(
         return_cost_deducted_prior_execution=True,
     )
     # The post-fork intrinsic is below the pre-fork one, so the same
-    # gas_limit straddles validity at the boundary.
-    assert intrinsic_after < intrinsic_before
-    gas_limit = intrinsic_after
+    # gas_limit straddles validity at the boundary. Post-fork, the
+    # authorization's floor exceeds its intrinsic and is the minimum.
+    floor_after = after.transaction_data_floor_cost_calculator()(
+        data=b"", authorization_list_or_count=1
+    )
+    assert intrinsic_after < floor_after < intrinsic_before
+    gas_limit = floor_after
 
     target_before = pre.deploy_contract(code=Op.STOP)
     target_after = pre.deploy_contract(code=Op.STOP)

@@ -5641,6 +5641,7 @@ def test_bal_blob_fee_leaves_sender_only(
         access_list=[],
         recipient_type=RecipientType.EOA,
         sends_value=True,
+        blob_versioned_hashes_or_count=1,
     )
     top_frame_state_gas = fork.transaction_top_frame_state_gas(
         sends_value=True, recipient_type=RecipientType.EOA

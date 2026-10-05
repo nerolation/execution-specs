@@ -87,6 +87,45 @@ def _destination_recipient_type(
     return RecipientType.EOA
 
 
+def _blob_tx_gas(
+    fork: Fork | TransitionFork,
+    *,
+    calldata: bytes,
+    access_list: List[AccessList],
+    value: int,
+    recipient_type: RecipientType,
+    blob_hashes: List[Hash] | None,
+) -> int:
+    """
+    Return the gas a blob transaction consumes: its intrinsic and
+    top-frame state gas, lifted to its floor where that binds.
+    """
+    post_transition_fork = fork.transitions_to()
+    intrinsic_calc = (
+        post_transition_fork.transaction_intrinsic_cost_calculator()
+    )
+    sends_value = value > 0
+    minimum_gas = intrinsic_calc(
+        calldata=calldata,
+        access_list=access_list,
+        recipient_type=recipient_type,
+        sends_value=sends_value,
+        blob_versioned_hashes_or_count=blob_hashes,
+    )
+    consumed_gas = intrinsic_calc(
+        calldata=calldata,
+        access_list=access_list,
+        recipient_type=recipient_type,
+        sends_value=sends_value,
+        blob_versioned_hashes_or_count=blob_hashes,
+        return_cost_deducted_prior_execution=True,
+    ) + post_transition_fork.transaction_top_frame_state_gas(
+        recipient_type=recipient_type,
+        sends_value=sends_value,
+    )
+    return max(minimum_gas, consumed_gas)
+
+
 @pytest.fixture
 def tx_gas(
     fork: Fork | TransitionFork,
@@ -95,27 +134,19 @@ def tx_gas(
     tx_value: int,
     destination_account_code: Bytecode | None,
     destination_account_balance: int,
+    blob_hashes_per_tx: List[List[Hash]],
 ) -> int:
-    """Gas allocated to transactions sent during test."""
-    post_transition_fork = fork.transitions_to()
-    tx_intrinsic_cost_calculator = (
-        post_transition_fork.transaction_intrinsic_cost_calculator()
-    )
-    recipient_type = _destination_recipient_type(
-        destination_account_code, destination_account_balance
-    )
-    sends_value = tx_value > 0
-    intrinsic = tx_intrinsic_cost_calculator(
+    """Gas allocated to the first transaction sent during test."""
+    return _blob_tx_gas(
+        fork,
         calldata=tx_calldata,
         access_list=tx_access_list,
-        recipient_type=recipient_type,
-        sends_value=sends_value,
+        value=tx_value,
+        recipient_type=_destination_recipient_type(
+            destination_account_code, destination_account_balance
+        ),
+        blob_hashes=blob_hashes_per_tx[0] if blob_hashes_per_tx else None,
     )
-    top_frame_state = post_transition_fork.transaction_top_frame_state_gas(
-        recipient_type=recipient_type,
-        sends_value=sends_value,
-    )
-    return intrinsic + top_frame_state
 
 
 @pytest.fixture
@@ -127,7 +158,7 @@ def tx_gas_per_tx(
     tx_value: int,
     destination_account_code: Bytecode | None,
     destination_account_balance: int,
-    blob_hashes_per_tx: List[List[bytes]],
+    blob_hashes_per_tx: List[List[Hash]],
 ) -> List[int]:
     """
     Gas allocated to each transaction in the block.
@@ -136,33 +167,22 @@ def tx_gas_per_tx(
     the recipient is no longer empty, so the EIP-2780 top-frame
     ``NEW_ACCOUNT`` state-gas charge does not fire on subsequent txs.
     """
-    n_txs = len(blob_hashes_per_tx)
-    if n_txs <= 1:
-        return [tx_gas] * n_txs
-
-    destination_starts_empty = (
-        destination_account_code is None and destination_account_balance == 0
+    recipient_type = _destination_recipient_type(
+        destination_account_code, destination_account_balance
     )
-    if destination_starts_empty and tx_value > 0:
-        post_transition_fork = fork.transitions_to()
-        intrinsic_calc = (
-            post_transition_fork.transaction_intrinsic_cost_calculator()
-        )
-        intrinsic = intrinsic_calc(
+    if recipient_type == RecipientType.EMPTY_ACCOUNT and tx_value > 0:
+        recipient_type = RecipientType.EOA
+    return [tx_gas] + [
+        _blob_tx_gas(
+            fork,
             calldata=tx_calldata,
             access_list=tx_access_list,
-            recipient_type=RecipientType.EOA,
-            sends_value=True,
+            value=tx_value,
+            recipient_type=recipient_type,
+            blob_hashes=blob_hashes,
         )
-        top_frame_state = post_transition_fork.transaction_top_frame_state_gas(
-            recipient_type=RecipientType.EOA,
-            sends_value=True,
-        )
-        tx_gas_nonempty = intrinsic + top_frame_state
-    else:
-        tx_gas_nonempty = tx_gas
-
-    return [tx_gas] + [tx_gas_nonempty] * (n_txs - 1)
+        for blob_hashes in blob_hashes_per_tx[1:]
+    ]
 
 
 @pytest.fixture

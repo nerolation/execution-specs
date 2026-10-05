@@ -77,6 +77,8 @@ class TransactionDataFloorCostCalculator(Protocol):
         contract_creation: bool = False,
         sends_value: bool = False,
         recipient_type: RecipientType = RecipientType.CONTRACT,
+        authorization_list_or_count: Sized | int | None = None,
+        blob_versioned_hashes_or_count: Sized | int | None = None,
     ) -> int:
         """
         Return transaction gas cost of calldata given its contents.
@@ -84,7 +86,11 @@ class TransactionDataFloorCostCalculator(Protocol):
         The defaults model a zero-value call to another account. Forks
         that anchor the floor on the transaction's intrinsic base
         (EIP-2780) add gas for these arguments, so create, value-bearing,
-        and self-transfer transactions must pass them explicitly.
+        and self-transfer transactions must pass them explicitly. Forks
+        that price every transaction content byte (EIP-8131) need the
+        authorization list and the blob versioned hashes, or their
+        counts; EIP-8279 adds each authorization's block access list
+        bytes on the same argument.
         """
         pass
 
@@ -136,6 +142,7 @@ class TransactionIntrinsicCostCalculator(Protocol):
         return_cost_deducted_prior_execution: bool = False,
         sends_value: bool = False,
         recipient_type: RecipientType = RecipientType.CONTRACT,
+        blob_versioned_hashes_or_count: Sized | int | None = None,
     ) -> int:
         """
         Return the intrinsic gas cost of a transaction given its properties.
@@ -146,6 +153,9 @@ class TransactionIntrinsicCostCalculator(Protocol):
           access_list: The list of access lists for the transaction.
           authorization_list_or_count: The list of authorizations or the count
                                        of authorizations for the transaction.
+          blob_versioned_hashes_or_count: The blob versioned hashes or their
+                                          count; forks that price them into
+                                          the floor (EIP-8131) use this.
           return_cost_deducted_prior_execution: If set to False, the returned
                                                 value is equal to the minimum
                                                 gas required for the
@@ -564,6 +574,29 @@ class BaseFork(ForkOpcodeInterface, metaclass=BaseForkMeta):
 
         Each system contract address counts as 1 item, and each unique
         storage key it touches (reads or writes) counts as 1 item.
+        """
+        pass
+
+    @classmethod
+    @abstractmethod
+    def block_access_list_floor_cost(
+        cls,
+        *,
+        addresses: int = 0,
+        storage_keys: int = 0,
+        storage_values: int = 0,
+        balances: int = 0,
+        nonces: int = 0,
+        code_bytes: int = 0,
+    ) -> int:
+        """
+        Return the floor gas the given block access list entries add to a
+        transaction when its execution meters them (EIP-8279).
+
+        Each argument counts entries of that kind: addresses accessed
+        cold, storage keys accessed cold, slots whose value changed,
+        balances and nonces changed, and bytes of deployed code. Zero on
+        forks that do not meter block access list bytes.
         """
         pass
 

@@ -21,10 +21,15 @@ class EIP7976(BaseFork):
 
     @classmethod
     def gas_costs(cls) -> GasCosts:
-        """Transaction data floor token cost is increased from 10 to 16."""
+        """
+        Increase the transaction data floor token cost from 10 to 16, so
+        that every byte, at four floor tokens, is priced at 64 gas.
+        """
+        parent = super(EIP7976, cls).gas_costs()
         return replace(
-            super(EIP7976, cls).gas_costs(),
+            parent,
             TX_DATA_TOKEN_FLOOR=16,
+            FLOOR_GAS_PER_BYTE=16 * parent.TX_DATA_TOKEN_STANDARD,
         )
 
     @classmethod

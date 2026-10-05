@@ -15,6 +15,7 @@ from execution_testing import (
     Hash,
     Header,
     NetworkWrappedTransaction,
+    RecipientType,
     Transaction,
     TransactionException,
 )
@@ -42,9 +43,20 @@ def tx_value() -> int:
 
 
 @pytest.fixture
-def tx_gas() -> int:
-    """Gas allocated to transactions sent during test."""
-    return 21_000
+def tx_gas(
+    fork: Fork, tx_value: int, txs_versioned_hashes: List[List[Hash]]
+) -> int:
+    """
+    Gas allocated to transactions sent during test: the least the fork
+    accepts for a blob transaction to the empty destination.
+    """
+    return fork.transitions_to().transaction_intrinsic_cost_calculator()(
+        sends_value=tx_value > 0,
+        recipient_type=RecipientType.EMPTY_ACCOUNT,
+        blob_versioned_hashes_or_count=max(
+            (len(hashes) for hashes in txs_versioned_hashes), default=0
+        ),
+    )
 
 
 @pytest.fixture

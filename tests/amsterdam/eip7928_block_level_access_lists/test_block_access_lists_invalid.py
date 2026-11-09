@@ -2737,3 +2737,104 @@ def test_bal_invalid_missing_system_contract_entry(
             )
         ],
     )
+
+
+@pytest.mark.valid_from("Amsterdam")
+@pytest.mark.exception_test
+@pytest.mark.parametrize(
+    "surplus_change",
+    [
+        pytest.param(
+            BalBalanceChange(block_access_index=2, post_balance=999),
+            id="balance_change",
+        ),
+        pytest.param(
+            BalNonceChange(block_access_index=2, post_nonce=999),
+            id="nonce_change",
+        ),
+        pytest.param(
+            BalCodeChange(block_access_index=2, new_code=b"Amsterdam"),
+            id="code_change",
+        ),
+    ],
+)
+def test_bal_surplus_uncounted_change_at_item_cap(
+    blockchain_test: BlockchainTestFiller,
+    pre: Alloc,
+    fork: Fork,
+    surplus_change: BalBalanceChange | BalNonceChange | BalCodeChange,
+) -> None:
+    """
+    Reject a BAL carrying surplus entries in a field the item cap does not
+    count.
+
+    EIP-7928 bounds BAL *items* (`bal_items <= block_gas_limit //
+    BLOCK_ACCESS_LIST_ITEM`), counting addresses and storage keys.
+    `balance_changes`, `nonce_changes` and `code_changes` are not counted, so
+    the item count and the encoded size are decoupled: entries can be
+    appended to those fields without moving the count.
+
+    The block gas limit here is sized so the honest BAL is exactly at the
+    item cap. A surplus entry in an uncounted field therefore cannot be
+    caught by `BLOCK_ACCESS_LIST_GAS_LIMIT_EXCEEDED`, and has to be caught by
+    comparing the supplied BAL against the one execution produces.
+
+    The surplus entry sits at `block_access_index` 2, the post-tx system
+    index of a one-transaction block, so it is in range and strictly ordered
+    after the account's genuine index-1 entry. Nothing about its shape is
+    malformed; only its presence is wrong.
+    """
+    # Match the framework's DEFAULT_BASE_FEE so gas_price == base_fee and the
+    # priority fee cancels, keeping the coinbase out of the expected counts.
+    base_fee_per_gas = 7
+
+    alice = pre.fund_eoa()
+    # Keep bob alive so the transfer avoids the EIP-2780 `NEW_ACCOUNT` state
+    # charge, which would push the tx past the BAL-sized block gas limit.
+    bob = pre.fund_eoa(amount=1)
+
+    tx = Transaction(
+        sender=alice,
+        to=bob,
+        value=1,
+        gas_price=base_fee_per_gas,
+    )
+
+    # alice (sender) + bob (recipient) + coinbase, credited the fee.
+    total_items = fork.empty_block_bal_item_count() + 3
+    gas_limit = total_items * fork.gas_costs().BLOCK_ACCESS_LIST_ITEM
+
+    blockchain_test(
+        pre=pre,
+        post={
+            alice: Account(nonce=0),
+            bob: Account(balance=1),
+        },
+        blocks=[
+            Block(
+                txs=[tx],
+                exception=BlockException.INVALID_BLOCK_ACCESS_LIST,
+                expected_block_access_list=BlockAccessListExpectation(
+                    account_expectations={
+                        alice: BalAccountExpectation(
+                            nonce_changes=[
+                                BalNonceChange(
+                                    block_access_index=1, post_nonce=1
+                                )
+                            ],
+                        ),
+                        bob: BalAccountExpectation(
+                            balance_changes=[
+                                BalBalanceChange(
+                                    block_access_index=1, post_balance=2
+                                )
+                            ],
+                        ),
+                    }
+                ).modify(append_change(account=bob, change=surplus_change)),
+            )
+        ],
+        genesis_environment=Environment(
+            base_fee_per_gas=base_fee_per_gas, gas_limit=gas_limit
+        ),
+    )
